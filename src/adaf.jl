@@ -3,7 +3,7 @@
 # the simple local relief model and whose output is the probability of an archaeological feature at each cell. The
 # network itself is in hrnet.jl; here are the weights, the input and the features.
 
-const ADAF_RECORD = "https://zenodo.org/records/15848662/files/"
+const ADAF_RECORD = "https://zenodo.org/records/15848663/files/"
 const ADAF_FILES = Dict(
 	:all => "AO_HRNet_SLRM_512px_pretrained_train_12_val_124_with_Transformation.tar",
 	:barrow => "barrow_HRNet_SLRM_512px_pretrained_train_12_val_124_with_Transformation.tar",
