@@ -1,0 +1,13 @@
+# The vignette of ArchaeologicalDetection.jl, shown in Package Vignettes once the package is installed.
+article = ""
+author = "Antonio Saragga Seabra"
+citation = ""
+description = "ADAF's trained HRNet models for archaeological features in lidar terrain models, run in Julia and checked against PyTorch"
+license = "MIT"
+method = "Detection of archaeological features by trained networks"
+package = "ArchaeologicalDetection"
+repository = "https://github.com/Trumpingtons/ArchaeologicalDetection.jl"
+source = "ArchaeologicalDetection.tex"
+title = "ArchaeologicalDetection: trained networks for archaeological prospection in Julia"
+topic = "Archaeological Prospection"
+version = "0.1.0"

@@ -1,0 +1,157 @@
+% Pollis Domain Packages: ArchaeologicalDetection.jl
+% Compile from this folder with: julia -e 'using PollisTeX; display(compile("ArchaeologicalDetection.tex"))'
+% The values of How it was checked come from the comparison with PyTorch run on the day the text names.
+\input{vignette_style}
+
+% A package Pollis needs for panels of its own, not one that reproduces a paper: its own header, key facts and credit
+\renewcommand{\vignetteauthor}{Antonio Saragga Seabra}
+\renewcommand{\vignettedate}{22 November 2026}
+\renewcommand{\vignettelicense}{MIT}
+\fancyfoot[L]{\footnotesize\color{soft}\textbf{Pollis}\enspace Domain Packages\enspace·\enspace\nmtheme}
+\renewcommand{\nmhead}[3]{%
+  \renewcommand{\nmtheme}{#1}%
+  \thispagestyle{fancy}%
+  \begin{minipage}[c]{13mm}\pollislogo{11mm}\end{minipage}%
+  \begin{minipage}[c]{\dimexpr\linewidth-13mm\relax}
+    {\color{navy}\Large\bfseries Pollis}\enspace{\color{soft}Domain Packages}\hfill
+    {\color{deepamber}\small\bfseries\MakeUppercase{#1}}
+  \end{minipage}\par\vspace{7mm}
+  {\color{navy}\fontsize{22}{26}\selectfont\bfseries #2}\par\vspace{4pt}
+  {\color{soft}\large #3}\par\vspace{5mm}}
+\renewcommand{\factsheet}[4]{%
+  \begin{tcolorbox}[enhanced, colback=pale, colframe=pale, boxrule=0pt, sharp corners,
+    left=7pt, right=7pt, top=5pt, bottom=5pt, fontupper=\small]
+  \begin{tabularx}{\linewidth}{@{}>{\leavevmode\bfseries\color{navy}}p{27mm}>{\leavevmode}X@{}}
+  Purpose & #1\\
+  Models & #2\\
+  Package & #3\\
+  Checked & #4
+  \end{tabularx}
+  \end{tcolorbox}}
+\renewcommand{\nmcredit}{%
+  \par\vfill
+  \begin{minipage}[b]{0.78\linewidth}\footnotesize\color{soft}
+  Package written and checked with Claude Code (Anthropic) in Pollis.\par
+  \textcopyright\ 2026 \vignetteauthor\enspace·\enspace Licensed under \vignettelicense\enspace·\enspace\vignettedate
+  \end{minipage}\hfill
+  \begin{minipage}[b]{0.18\linewidth}\raggedleft\pollislogo{9mm}\par\vspace{2pt}{\footnotesize contact@pollis.org}\end{minipage}}
+\newcolumntype{R}{>{\raggedleft\arraybackslash}X}
+\newcolumntype{L}{>{\raggedright\arraybackslash}X}
+\newcolumntype{P}[1]{>{\raggedright\arraybackslash}p{#1}}
+
+\begin{document}
+\emergencystretch=3em
+
+\nmhead{Archaeological Prospection}
+  {ArchaeologicalDetection: trained networks for archaeological prospection in Julia}
+  {The HRNet segmentation models of ADAF, applied to lidar terrain models without Python}
+
+\factsheet
+  {To apply trained neural networks to a terrain model and draw from their output the features to examine as possible
+   archaeology.}
+  {The four HRNet segmentation models of ADAF, the Automatic Detection of Archaeological Features tool: all archaeology,
+   barrows, enclosures and ringforts.}
+  {\package{ArchaeologicalDetection}{https://github.com/Trumpingtons/ArchaeologicalDetection.jl}, MIT. It computes
+   with NNlib.jl, reads the weights with Pickle.jl, and takes terrain models read with Rasters.jl.}
+  {The network against PyTorch on 1,048,576 cells: 22,290 reach a probability of 0.5 in Julia and 22,290 in PyTorch,
+   and no cell differs on that side of 0.5. The largest difference in probability is 0.0000751.}
+
+\nmsection{The models}
+\nmcite{coz2026}{Čož, Corns, Curran, Kocev and Kokalj (2026)} trained neural networks to find enclosures, ringforts and
+barrows in airborne laser scanning data of Ireland, labelled by experts, at cells of 0.5 m, and made them available in
+ADAF. \nmcite{kostovska2025}{Kostovska, Kocev, Čož, Kokalj, Curran and Corns (2025)} published the weights: four models
+for semantic segmentation, which give the probability that each cell belongs to a feature, and four for object
+detection, which give boxes with scores. This package runs the four segmentation models. A trained model recognises
+forms like those it was shown, so what it finds elsewhere are places to check.
+
+\nmsection{From a terrain model to features}
+\begin{valuetable}{@{}P{25mm} P{36mm} L@{}}
+Step & Function & What it computes \\ \midrule
+Weights & \fn{adaf\_weights} & The file of one of the four models, about 860 MB, downloaded once from Zenodo \\
+Input & \fn{adaf\_input} & The simple local relief model (\nmcite{hesse2010}{Hesse, 2010}) with a radius of 10 cells, or 10 m for cells finer than 1 m, clipped to $-0.5$ to 0.5 m and stretched onto 0 to 1; 0 where it is undefined \\
+Network & \fn{adaf\_model} & The HRNet with the weights of the file \\
+Probability & \fn{adaf\_probability} & The network on tiles of 1024 by 1024 cells from the north-west corner, filled with 0 beyond the terrain model \\
+Features & \fn{adaf\_features} & The cells with a probability of at least the threshold, without the 8 cells along the edges of each tile, joined through their sides; each feature's area, roundness and highest probability, and the filters on area and roundness \\
+\end{valuetable}
+
+\nmsub{Use}
+{\small\begin{verbatim}
+using ArchaeologicalDetection, Rasters, ArchGDAL
+
+dem = replace_missing(read(Raster("terrain.tif")), NaN32)
+model = adaf_model(adaf_weights("models"; feature = :all))
+probability = adaf_probability(model, dem)
+found = adaf_features(probability; threshold = 0.5)
+found.candidates
+\end{verbatim}
+}
+
+\nmsection{The HRNet port}
+ADAF builds its segmentation network with AiTLAS
+(\nmcite{dimitrovski2023}{Dimitrovski, Kitanovski, Panov, Kostovska, Simidjievski and Kocev, 2023}): a High-Resolution
+Network (\nmcite{wang2021}{Wang and 11 coauthors, 2021}) with 48 channels in its finest branch, as PyTorch Image Models
+defines it (\nmcite{wightman2019}{Wightman, 2019}), under a head of AiTLAS's own. The port writes both with the
+convolutions of NNlib.jl.
+\begin{itemize}
+\item \textbf{Backbone.} Two convolutions of stride 2, a layer of bottleneck blocks, then three stages of two, three
+  and four branches at a quarter, an eighth, a sixteenth and a thirty-second of the resolution of the input, each
+  module ending in the fusion of every branch into every other.
+\item \textbf{Head.} The output of the first layer and of the four branches brought to 120 by 120 cells by nearest
+  neighbour, joined into 976 channels, and projected to two outputs. The sigmoid of the second, enlarged to the tile by
+  bilinear interpolation, is the probability.
+\item \textbf{Weights.} Pickle.jl reads the tensors of PyTorch's checkpoint without running Python. Their axes are
+  reversed for NNlib.jl.
+\item \textbf{Batch normalisation.} The network is only applied, never trained, so each batch normalisation is folded
+  into the weights and bias of the convolution before it.
+\item \textbf{Interpolation.} Nearest and bilinear interpolation follow PyTorch's rules, in single precision and
+  without aligning the corners.
+\end{itemize}
+
+\nmsection{How it was checked}
+A port is faithful when it gives what the original network gives on the same input. On 22 November 2026 the network
+was run in Julia and in PyTorch on one tile.
+\begin{valuetable}{@{}P{25mm} L@{}}
+ & The comparison \\ \midrule
+Data & The north-west 1024 by 1024 cells of a 1 m terrain model around Wandlebury Ring, south-east of Cambridge, from the LIDAR Composite DTM (\nmcite{ea2022}{Environment Agency, 2022}) \\
+Input & Computed once, by \fn{adaf\_input}, and given to both networks as the same array of single-precision numbers \\
+Model & All Archaeology, the same checkpoint in both \\
+Reference & PyTorch 2.15.0, with the HRNet of PyTorch Image Models 1.0.31 and the forward pass and head of AiTLAS written out from its source; the checkpoint loaded with no missing and no unexpected key \\
+Julia & Julia 1.13.3, NNlib.jl 0.9.60 and Pickle.jl 0.3.7, on the processor \\
+\end{valuetable}
+
+\vspace{4pt}
+\begin{valuetable}{@{}L >{\raggedleft\arraybackslash}p{36mm} >{\raggedleft\arraybackslash}p{36mm}@{}}
+Value & Julia & PyTorch \\ \midrule
+Cells compared & 1,048,576 & 1,048,576 \\
+Cells with a probability of at least 0.5 & 22,290 & 22,290 \\
+Smallest probability & $8.0827025\times10^{-21}$ & $8.0827639\times10^{-21}$ \\
+Largest probability & 1.0 & 1.0 \\ \midrule
+Cells on different sides of 0.5 & \multicolumn{2}{r@{}}{0} \\
+Largest absolute difference in probability & \multicolumn{2}{r@{}}{$7.510185\times10^{-5}$} \\
+Mean absolute difference in probability & \multicolumn{2}{r@{}}{$4.380145\times10^{-8}$} \\
+\end{valuetable}
+
+\nmsub{What the check does not cover}
+\begin{itemize}
+\item \textbf{The other three models.} Barrows, enclosures and ringforts were not compared.
+\item \textbf{The input image.} Both networks read the image computed in Julia, which was not compared with the image
+  ADAF computes.
+\item \textbf{The features.} \fn{adaf\_features} follows ADAF's rules, and its features were not compared with the
+  polygons ADAF writes.
+\item \textbf{Detection itself.} Agreement with PyTorch says that the port is faithful. It says nothing of how well
+  the models detect archaeology, and it does not replicate the evaluation in the article.
+\end{itemize}
+
+\nmsection{References}
+{\footnotesize\raggedright\setlength{\parskip}{1pt}
+\nmref{coz2026}{Čož, N., Corns, A., Curran, S., Kocev, D. and Kokalj, Ž. (2026). Automatic detection of archaeological features from airborne laser scanning data using deep learning: development and evaluation of the ADAF tool. \emph{Journal of Archaeological Science: Reports}, 71, 105733. \nmdoi{10.1016/j.jasrep.2026.105733}}
+\nmref{dimitrovski2023}{Dimitrovski, I., Kitanovski, I., Panov, P., Kostovska, A., Simidjievski, N. and Kocev, D. (2023). AiTLAS: artificial intelligence toolbox for Earth observation. \emph{Remote Sensing}, 15(9), 2343. \nmdoi{10.3390/rs15092343}}
+\nmref{ea2022}{Environment Agency (2022). LIDAR Composite Digital Terrain Model (DTM) -- 1m. Dataset. \href{https://environment.data.gov.uk/dataset/13787b9a-26a4-4775-8523-806d13af58fc}{\color{pblue}environment.data.gov.uk}}
+\nmref{hesse2010}{Hesse, R. (2010). LiDAR-derived local relief models -- a new tool for archaeological prospection. \emph{Archaeological Prospection}, 17(2), 67--72. \nmdoi{10.1002/arp.374}}
+\nmref{kostovska2025}{Kostovska, A., Kocev, D., Čož, N., Kokalj, Ž., Curran, S. and Corns, A. (2025). ADAF machine learning model weights. Dataset, version 1.0.0. \nmdoi{10.5281/zenodo.15848663}}
+\nmref{wang2021}{Wang, J., Sun, K., Cheng, T., Jiang, B., Deng, C., Zhao, Y., Liu, D., Mu, Y., Tan, M., Wang, X., Liu, W. and Xiao, B. (2021). Deep high-resolution representation learning for visual recognition. \emph{IEEE Transactions on Pattern Analysis and Machine Intelligence}, 43(10), 3349--3364. \nmdoi{10.1109/TPAMI.2020.2983686}}
+\nmref{wightman2019}{Wightman, R. (2019). PyTorch Image Models. \nmdoi{10.5281/zenodo.4414861}}
+}
+
+\nmcredit
+\end{document}
