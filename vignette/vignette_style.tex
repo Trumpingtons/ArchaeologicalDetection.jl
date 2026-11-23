@@ -6,6 +6,8 @@
 \usepackage{iftex}
 \ifPDFTeX\usepackage[T1]{fontenc}\fi
 \usepackage[default,semibold]{sourcesanspro}
+% Source Code Pro for the package name in the title only (\pkgname): \ttfamily stays as it was
+\usepackage[nottdefault,semibold]{sourcecodepro}
 \usepackage{textcomp}
 \usepackage[italic]{mathastext}
 \usepackage{amsmath}
@@ -76,6 +78,8 @@
 \newcommand{\gt}{\,{\color{deepamber}\bfseries ›}\,}
 \newcommand{\menupath}[1]{{\bfseries\color{navy}#1}}
 \newcommand{\fn}[1]{\texttt{\small #1}}
+% The package name in the title, in Source Code Pro, whose semibold matches the weight of the title
+\newcommand{\pkgname}[1]{{\sourcecodepro #1}}
 % Citations: \nmcite{key}{Breiman (2001)} links to the entry \nmref{key}{...} in the References
 \newcommand{\nmcite}[2]{\hyperlink{ref:#1}{\color{pblue}#2}}
 \newcommand{\nmref}[2]{\raisebox{1.1em}[0pt][0pt]{\hypertarget{ref:#1}{}}#2\par}
