@@ -4,7 +4,7 @@
 module ArchaeologicalDetectionRastersExt
 
 using ArchaeologicalDetection, Rasters
-import ArchaeologicalDetection: adaf_input, adaf_probability, adaf_features
+import ArchaeologicalDetection: adaf_input, adaf_probability, adaf_features, forest_model, forest_probability, forest_features
 
 const L = Rasters.Lookups
 
@@ -55,5 +55,36 @@ function adaf_features(probability::Rasters.AbstractRaster; kw...)
 	end
 	return with_grid(probability, found)
 end
+
+# The random forest on a composite read with Rasters.jl: its cells by bands, X and Y first
+cells_by_bands(r) = parent(permutedims(r, (X, Y, Band)))
+
+"""
+    forest_model(composite::Raster, sites::Raster; kw...)
+
+A random forest trained on the composite `composite` (see `sentinel_composite`) to tell the cells of `sites` (see
+`site_cells`), on its grid, from the rest: see `forest_model(features, sites, cellsize)`.
+"""
+function forest_model(composite::Rasters.AbstractRaster, sites::Rasters.AbstractRaster; kw...)
+	grid = composite[Band(1)]
+	size(sites) == size(grid) || throw(DimensionMismatch("sites is not on the grid of the composite"))
+	return forest_model(cells_by_bands(composite), Bool.(parent(permutedims(sites, (X, Y)))), abs(steps(grid)[1]); kw...)
+end
+
+"""
+    forest_probability(model, composite::Raster)
+
+The probability of a site at every cell of `composite`, from the random forest `model`, on its grid: missing where a
+band is.
+"""
+forest_probability(model, composite::Rasters.AbstractRaster) = on_grid(permutedims(composite[Band(1)], (X, Y)), forest_probability(model, cells_by_bands(composite)))
+
+"""
+    forest_features(probability::Raster; threshold = 0.55, kw...)
+
+The features of the probability map `probability` of a random forest, at `x` and `y`, and their cells as a raster
+`labels`: see `forest_features(probability, cellsize)`.
+"""
+forest_features(probability::Rasters.AbstractRaster; threshold::Real = 0.55, kw...) = adaf_features(probability; threshold, margin = 0, kw...)
 
 end
