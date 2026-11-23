@@ -1,17 +1,19 @@
 name = "ArchaeologicalDetection"
 uuid = "e4fab08a-9b87-475a-9a68-5d77bd0061a8"
 authors = ["Antonio Saragga Seabra"]
-version = "0.2.1"
+version = "0.2.2"
 
 [deps]
 DecisionTree = "7806a523-6efd-50cb-b5f6-3fa6f1930dbb"
 Downloads = "f43a241f-c20a-4ad4-852c-f6b1247861c6"
+JLD2 = "033835bb-8acc-5ee8-8aae-3f567f8a3819"
 JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
 NNlib = "872c559c-99b0-510c-b3b7-b6c96a88d5cd"
 Pickle = "fbb45041-c46e-462f-888f-7c521cafbc2c"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 SmartRegions = "2b666290-b2df-4ac3-9f74-2cd1fb537102"
 Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
+ZipArchives = "49080126-0e18-4c2a-b176-c102e4b3760c"
 
 [weakdeps]
 ArchGDAL = "c9ce4bd3-c3d5-55b8-8973-c0e20141b8c3"
@@ -25,6 +27,7 @@ ArchaeologicalDetectionSentinelExt = ["Rasters", "ArchGDAL"]
 ArchGDAL = "0.10"
 DecisionTree = "0.12"
 Downloads = "1"
+JLD2 = "0.5, 0.6"
 JSON = "0.21, 1"
 NNlib = "0.9"
 Pickle = "0.3"
@@ -32,4 +35,5 @@ Random = "1"
 Rasters = "0.14, 0.15"
 SmartRegions = "0.3.2"
 Statistics = "1"
+ZipArchives = "2"
 julia = "1.10"

@@ -1,11 +1,12 @@
 # The multitemporal Sentinel-2 composite, read with ArchGDAL.jl from the Cloud-Optimised GeoTIFFs of Earth Search (only
-# the cells of the area, each scene warped onto one grid of the UTM zone), and the cells of known sites from a vector file
+# the cells of the area, each scene warped onto one grid of the UTM zone); RGB images from map tiles, a WMS or a file,
+# warped onto the same kind of grid; and the cells or points of known sites from a vector file
 
 module ArchaeologicalDetectionSentinelExt
 
 using ArchaeologicalDetection, Rasters, ArchGDAL
-import ArchaeologicalDetection: sentinel_composite, site_cells
-using ArchaeologicalDetection: SENTINEL_BANDS, CLOUDY_CLASSES
+import ArchaeologicalDetection: sentinel_composite, site_cells, aerial_image, site_points
+using ArchaeologicalDetection: SENTINEL_BANDS, CLOUDY_CLASSES, Downloads, JSON
 
 const L = Rasters.Lookups
 
@@ -115,6 +116,96 @@ function site_cells(composite::Rasters.AbstractRaster, sites::AbstractString; ra
 	end
 	isempty(geometries) && error("$(sites) has no features")
 	return boolmask(geometries; to = grid)
+end
+
+# A source of GDAL's WMS driver of map tiles of Web Mercator at zoom level z: url with ${z}, ${x} and ${y}
+function map_tiles(url, z)
+	r = 20037508.342789244
+	escaped = replace(url, "&" => "&amp;")
+	return """<GDAL_WMS><Service name="TMS"><ServerUrl>$(escaped)</ServerUrl></Service><DataWindow><UpperLeftX>$(-r)</UpperLeftX><UpperLeftY>$(r)</UpperLeftY><LowerRightX>$(r)</LowerRightX><LowerRightY>$(-r)</LowerRightY><TileLevel>$(z)</TileLevel><TileCountX>1</TileCountX><TileCountY>1</TileCountY><YOrigin>top</YOrigin></DataWindow><Projection>EPSG:3857</Projection><BlockSizeX>256</BlockSizeX><BlockSizeY>256</BlockSizeY><BandsCount>3</BandsCount><MaxConnections>8</MaxConnections><ZeroBlockHttpCodes>204,404</ZeroBlockHttpCodes></GDAL_WMS>"""
+end
+
+# The zoom level whose tiles are just finer than cellsize at the latitude of the centre of the box
+function zoom(box, cellsize)
+	ground = 2pi * 6378137 * cosd((box[2] + box[4]) / 2) / 256
+	return clamp(ceil(Int, log2(ground / cellsize)), 0, 21)
+end
+
+function api_key(name)
+	key = strip(get(ENV, name, ""))
+	isempty(key) && error("No key in ENV[\"$(name)\"]: set it to read these tiles")
+	return key
+end
+
+# A session of Google's Map Tiles API for satellite tiles
+function google_session(key)
+	body = JSON.json(Dict("mapType" => "satellite", "language" => "en-US", "region" => "US"))
+	response = IOBuffer()
+	Downloads.request("https://tile.googleapis.com/v1/createSession?key=$(key)"; method = "POST", headers = ["Content-Type" => "application/json"], input = IOBuffer(body), output = response)
+	return JSON.parse(String(take!(response)))["session"]
+end
+
+function image_source(source, box, cellsize)
+	z = zoom(box, cellsize)
+	if source === :esri
+		return map_tiles("https://ibasemaps-api.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/tile/\${z}/\${y}/\${x}?token=$(api_key("ARCGIS_API_KEY"))", z)
+	elseif source === :google
+		key = api_key("GOOGLE_MAPS_API_KEY")
+		return map_tiles("https://tile.googleapis.com/v1/2dtiles/\${z}/\${x}/\${y}?session=$(google_session(key))&key=$(key)", z)
+	elseif source isa AbstractString && startswith(source, "WMS:")
+		return source
+	elseif source isa AbstractString
+		isfile(source) || error("No file $(source)")
+		return source
+	end
+	error("source is :esri, :google, a \"WMS:\" connection string or the path of a raster file")
+end
+
+function aerial_image(box; source = :esri, path = nothing, cellsize::Real = 1)
+	if path !== nothing && isfile(path)
+		return Raster(path; checkmem = false)
+	end
+	epsg = utm(box)
+	e = extent(box, epsg, cellsize)
+	target = path === nothing ? tempname() * ".tif" : abspath(path)
+	mkpath(dirname(target))
+	partial = target * ".part"  # moved to target only when whole, so that an image cut short is never read as the image
+	try
+		ArchGDAL.environment(; globalconfig = ["GDAL_HTTP_MAX_RETRY" => "4", "GDAL_HTTP_RETRY_DELAY" => "2"]) do
+			ArchGDAL.read(image_source(source, box, cellsize)) do s
+				ArchGDAL.nraster(s) >= 3 || error("The imagery has $(ArchGDAL.nraster(s)) bands: red, green and blue are needed")
+				options = ["-of", "GTiff", "-t_srs", "EPSG:$(epsg)", "-te", string.(e)..., "-tr", string(cellsize), string(cellsize), "-r", "bilinear",
+					"-srcband", "1", "-srcband", "2", "-srcband", "3", "-ot", "Byte", "-wo", "NUM_THREADS=ALL_CPUS", "-multi",
+					"-co", "COMPRESS=DEFLATE", "-co", "TILED=YES", "-co", "PHOTOMETRIC=RGB"]
+				ArchGDAL.gdalwarp([s], options; dest = partial) do w
+					nothing
+				end
+			end
+		end
+	catch
+		rm(partial; force = true)
+		rethrow()
+	end
+	mv(partial, target; force = true)
+	println("Image of ", round(Int, (e[3] - e[1]) / cellsize), " by ", round(Int, (e[4] - e[2]) / cellsize), " cells of ", cellsize, " m written to ", target)
+	return Raster(target; checkmem = false)
+end
+
+function site_points(grid::Rasters.AbstractRaster, sites::AbstractString)
+	target = crs(grid)
+	isnothing(target) && error("The raster has no coordinate system")
+	(xmin, xmax), (ymin, ymax) = Rasters.bounds(grid, X), Rasters.bounds(grid, Y)
+	points = ArchGDAL.read(sites) do ds
+		layer = ArchGDAL.getlayer(ds, 0)
+		ref = ArchGDAL.getspatialref(layer)
+		ref.ptr == C_NULL && error("$(sites) has no coordinate system")
+		source = WellKnownText(ArchGDAL.toWKT(ref))
+		map(layer) do feature
+			c = ArchGDAL.centroid(ArchGDAL.reproject(ArchGDAL.clone(ArchGDAL.getgeom(feature)), source, target; order = :trad))
+			(ArchGDAL.getx(c, 0), ArchGDAL.gety(c, 0))
+		end
+	end
+	return [p for p in points if xmin <= p[1] <= xmax && ymin <= p[2] <= ymax]
 end
 
 end

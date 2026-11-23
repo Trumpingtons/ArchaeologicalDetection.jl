@@ -4,7 +4,8 @@
 module ArchaeologicalDetectionRastersExt
 
 using ArchaeologicalDetection, Rasters
-import ArchaeologicalDetection: adaf_input, adaf_probability, adaf_features, forest_model, forest_probability, forest_features
+import ArchaeologicalDetection: adaf_input, adaf_probability, adaf_features, forest_model, forest_probability, forest_features, enki_pooled, enki_examples, enki_probability, enki_features
+using ArchaeologicalDetection: EnkiModel, ENKI_CELL, enki_head, share_threshold, NNlib, Random
 
 const L = Rasters.Lookups
 
@@ -86,5 +87,131 @@ The features of the probability map `probability` of a random forest, at `x` and
 `labels`: see `forest_features(probability, cellsize)`.
 """
 forest_features(probability::Rasters.AbstractRaster; threshold::Real = 0.55, kw...) = adaf_features(probability; threshold, margin = 0, kw...)
+
+# Enki on an RGB image read with Rasters.jl: its pixels from the north-west corner, red, green and blue, as Enki reads
+# them, kept in the image's own type (bytes for an image of aerial_image) and copied only when the axes must be turned
+function north_first_rgb(image)
+	size(image, Band) >= 3 || error("The image has $(size(image, Band)) bands: red, green and blue are needed")
+	r = size(image, Band) == 3 ? image : image[Band(1:3)]
+	a = Rasters.dimnum(r, (X, Y, Band)) == (1, 2, 3) ? parent(r) : parent(permutedims(r, (X, Y, Band)))
+	return north_first(image) ? a : reverse(a; dims = 2)
+end
+
+pixel(v) = Float32(coalesce(v, 0))
+
+# Whether the cell of side n from i, j (north-west corner) lies in the image and has an image over half of it at least
+function covered(a, i, j, n)
+	(i >= 1 && j >= 1 && i + n - 1 <= size(a, 1) && j + n - 1 <= size(a, 2)) || return false
+	black = count(pixel(a[x, y, 1]) == 0 && pixel(a[x, y, 2]) == 0 && pixel(a[x, y, 3]) == 0 for y in j:j + n - 1, x in i:i + n - 1)
+	return black <= n^2 / 2
+end
+
+# The pixels of the cell of side n from i, j, as Enki's 350 by 350
+function window(a, i, j, n)
+	w = pixel.(view(a, i:i + n - 1, j:j + n - 1, :))
+	return n == ENKI_CELL ? w : NNlib.upsample_bilinear(reshape(w, n, n, 3, 1); size = (ENKI_CELL, ENKI_CELL))[:, :, :, 1]
+end
+
+# The pooled channels of the cells of side n from the corners (i, j), in batches: only a batch of images at a time
+function pooled_batches(model, a, corners, n; batch, label = "images")
+	f = Matrix{Float32}(undef, 1280, length(corners))
+	t = time()
+	for (k, chunk) in enumerate(Iterators.partition(eachindex(corners), batch))
+		f[:, chunk] = enki_pooled(model, stack(window(a, corners[c]..., n) for c in chunk))
+		done = last(chunk)
+		(k % 10 == 0 || done == length(corners)) && println("Read ", done, " of ", length(corners), " ", label, " (", round(Int, time() - t), " s)")
+	end
+	return f
+end
+
+# The cell size of the image and its pixels to a cell of Enki's
+function pixels_per_cell(image)
+	cellsize = abs(steps(image)[1])
+	n = round(Int, ENKI_CELL / cellsize)
+	abs(n * cellsize - ENKI_CELL) <= cellsize / 2 || error("Cells of $(cellsize) m do not make a cell of $(ENKI_CELL) m")
+	return cellsize, n
+end
+
+"""
+    enki_pooled(model, image::Raster; batch = 16)
+
+The pooled channels of Enki's network (see `enki_pooled(model, images)`) for every cell of 350 m of the RGB image
+`image` (see `aerial_image`), cells counted from its north-west corner: a raster of cells of 350 m by `Band` 1 to 1,280,
+missing where half a cell has no image. The images are read `batch` at a time. These are the most of Enki's time: the
+head, trained or not, is then applied to them (see `enki_probability`).
+"""
+function enki_pooled(model::EnkiModel, image::Rasters.AbstractRaster; batch::Integer = 16)
+	a = north_first_rgb(image)
+	cellsize, n = pixels_per_cell(image)
+	nx, ny = size(a, 1) ÷ n, size(a, 2) ÷ n
+	(nx > 0 && ny > 0) || error("The image is smaller than a cell of $(ENKI_CELL) m")
+	kept = [(i, j) for j in 1:ny for i in 1:nx if covered(a, (i - 1) * n + 1, (j - 1) * n + 1, n)]
+	f = pooled_batches(model, a, [((i - 1) * n + 1, (j - 1) * n + 1) for (i, j) in kept], n; batch, label = "cells")
+	data = Array{Union{Missing, Float32}}(missing, nx, ny, 1280)
+	for (k, (i, j)) in enumerate(kept)
+		data[i, j, :] = f[:, k]
+	end
+	side = n * cellsize
+	west, top = Rasters.bounds(image, X)[1], Rasters.bounds(image, Y)[2]
+	x = X(Rasters.Projected(range(west; step = side, length = nx); order = L.ForwardOrdered(), span = L.Regular(Float64(side)), sampling = L.Intervals(L.Start()), crs = crs(image)))
+	y = Y(Rasters.Projected(range(top - side; step = -side, length = ny); order = L.ReverseOrdered(), span = L.Regular(-Float64(side)), sampling = L.Intervals(L.Start()), crs = crs(image)))
+	return Raster(data, (x, y, Band(1:1280)); missingval = missing, crs = crs(image), name = :pooled)
+end
+
+"""
+    enki_probability(model, cells::Raster)
+
+The share Enki's network `model` gives each cell of 350 m for "positive", a tell or mound-like feature, on the grid of
+`cells`: the pooled channels of `enki_pooled` (`Band` 1 to 1,280), or an RGB image (three bands), read first with
+`enki_pooled`. Missing where a cell has no image.
+"""
+function enki_probability(model::EnkiModel, cells::Rasters.AbstractRaster)
+	size(cells, Band) == 1280 || return enki_probability(model, enki_pooled(model, cells))
+	c = permutedims(cells, (X, Y, Band))
+	a = parent(c)
+	nx, ny = size(a, 1), size(a, 2)
+	v = fill(NaN, nx, ny)
+	kept = [I for I in CartesianIndices((nx, ny)) if !ismissing(a[I, 1])]
+	if !isempty(kept)
+		p = enki_head(model.hidden, model.output, Float32.(stack(a[I, :] for I in kept)))
+		v[kept] = p
+	end
+	return on_grid(c[Band(1)], v)
+end
+
+function enki_examples(model::EnkiModel, image::Rasters.AbstractRaster, cells::Rasters.AbstractRaster, sites; shift::Real = 50, negatives::Real = 5, distance::Real = 700, seed::Integer = 1, batch::Integer = 16)
+	isempty(sites) && error("No known sites inside the image")
+	a = north_first_rgb(image)
+	cellsize, n = pixels_per_cell(image)
+	west, top = Rasters.bounds(image, X)[1], Rasters.bounds(image, Y)[2]
+	half = ENKI_CELL / 2
+	corners = Tuple{Int, Int}[]
+	for (sx, sy) in sites, dy in (-shift, 0, shift), dx in (-shift, 0, shift)
+		i = floor(Int, (sx + dx - half - west) / cellsize) + 1
+		j = floor(Int, (top - (sy + dy + half)) / cellsize) + 1
+		covered(a, i, j, n) && push!(corners, (i, j))
+	end
+	isempty(corners) && error("No image of 350 m around a known site lies inside the image")
+	positives = pooled_batches(model, a, corners, n; batch, label = "images of sites")
+	c = permutedims(cells, (X, Y, Band))
+	p = parent(c)
+	xs, ys = centres(c, X), centres(c, Y)
+	away = [I for I in CartesianIndices((size(p, 1), size(p, 2))) if !ismissing(p[I, 1]) && all(hypot(xs[I[1]] - sx, ys[I[2]] - sy) >= distance for (sx, sy) in sites)]
+	wanted = min(round(Int, negatives * length(corners)), length(away))
+	wanted > 0 || error("No cell is $(distance) m from every known site")
+	drawn = away[Random.randperm(Random.Xoshiro(seed), length(away))[1:wanted]]
+	others = Float32.(stack(p[I, :] for I in drawn))
+	println(length(corners), " images of sites, ", wanted, " cells away from them")
+	return (pooled = hcat(positives, others), labels = [trues(length(corners)); falses(wanted)], positives = length(corners), negatives = wanted)
+end
+
+"""
+    enki_features(probability::Raster; threshold = 0.99, share = nothing, kw...)
+
+The features of Enki's map of shares `probability` (see `enki_probability`), at `x` and `y`, and their cells as a
+raster `labels`: see `enki_features(probability, cellsize)`, also for `share`.
+"""
+enki_features(probability::Rasters.AbstractRaster; threshold::Real = 0.99, share::Union{Nothing, Real} = nothing, kw...) =
+	adaf_features(probability; threshold = isnothing(share) ? threshold : share_threshold(probability, share), margin = 0, kw...)
 
 end

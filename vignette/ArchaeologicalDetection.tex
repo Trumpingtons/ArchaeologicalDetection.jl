@@ -1,11 +1,11 @@
 % Pollis Domain Packages: ArchaeologicalDetection.jl
 % Compile from this folder with: julia -e 'using PollisTeX; display(compile("ArchaeologicalDetection.tex"))'
-% The values of How it was checked come from the comparison with PyTorch run on the day the text names.
+% The values of How it was checked come from the comparisons with PyTorch and Keras run on the days the text names.
 \input{vignette_style}
 
 % A package Pollis needs for panels of its own, not one that reproduces a paper: its own header, key facts and credit
 \renewcommand{\vignetteauthor}{Antonio Saragga Seabra}
-\renewcommand{\vignettedate}{22 November 2026}
+\renewcommand{\vignettedate}{23 November 2026}
 \renewcommand{\vignettelicense}{MIT}
 \fancyfoot[L]{\footnotesize\color{soft}\textbf{Pollis}\enspace Domain Packages\enspace·\enspace\nmtheme}
 \renewcommand{\nmhead}[3]{%
@@ -43,19 +43,25 @@
 \emergencystretch=3em
 
 \nmhead{Archaeological Prospection}
-  {ArchaeologicalDetection: trained networks for archaeological prospection in Julia}
-  {The HRNet segmentation and Faster R-CNN object detection models of ADAF, applied to lidar terrain models without Python}
+  {ArchaeologicalDetection: trained models for archaeological prospection in Julia}
+  {The networks of ADAF on lidar terrain models, a random forest on Sentinel-2, and Enki on RGB imagery, without Python}
 
 \factsheet
-  {To apply trained neural networks to a terrain model and draw from their output the features to examine as possible
-   archaeology.}
+  {To apply trained models to a terrain model, a Sentinel-2 composite or an RGB image and draw from their output the
+   features to examine as possible archaeology.}
   {The four HRNet segmentation and four Faster R-CNN object detection models of ADAF, the Automatic Detection of
-   Archaeological Features tool: all archaeology, barrows, enclosures and ringforts.}
+   Archaeological Features tool: all archaeology, barrows, enclosures and ringforts. A random forest trained on known
+   sites in a multitemporal Sentinel-2 composite. Enki, a classifier of tells on RGB imagery of 1 m, whose two dense
+   layers can be trained again on known sites.}
   {\package{ArchaeologicalDetection}{https://github.com/Trumpingtons/ArchaeologicalDetection.jl}, MIT. It computes
-   with NNlib.jl, reads the weights with Pickle.jl, and takes terrain models read with Rasters.jl.}
+   with NNlib.jl and DecisionTree.jl, reads ADAF's weights with Pickle.jl and Enki's with JLD2.jl and ZipArchives.jl,
+   reads scenes and imagery with ArchGDAL.jl, and takes rasters read with Rasters.jl.}
   {HRNet against PyTorch on 1,048,576 cells: 22,290 reach a probability of 0.5 in Julia and 22,290 in PyTorch, and no
    cell differs on that side of 0.5; the largest difference in probability is 0.0000751. Faster R-CNN against
-   torchvision: the same three boxes, their sides within 0.000062 cells and their scores within 0.000005.}
+   torchvision: the same three boxes, their sides within 0.000062 cells and their scores within 0.000005. Enki
+   against Keras on eight images: its shares within 0.00000012. Enki trained again on the protected monuments of
+   one half of an area of Groningen and scored on those of the other: an AUC of 0.75 to 0.78, against 0.69 and 0.70
+   for Enki as published.}
 
 \nmsection{The models}
 \nmcite{coz2026}{Čož, Corns, Curran, Kocev and Kokalj (2026)} trained neural networks to find enclosures, ringforts and
@@ -127,10 +133,96 @@ background.
   to whole cells as ADAF rounds them, so the cells at or above a threshold are those of the boxes ADAF keeps.
 \end{itemize}
 
+\nmsection{The random forest on Sentinel-2}
+\nmcite{orengo2020}{Orengo, Conesa, Garcia-Molsosa, Lobo, Green, Madella and Petrie (2020)} found hundreds of mounded
+Indus settlements in Cholistan with a random forest (\nmcite{breiman2001}{Breiman, 2001}) trained in Earth Engine on
+mounds already known, in a composite of the mean of thousands of Sentinel-1 and Sentinel-2 scenes. The package makes
+the Sentinel-2 part of such a composite and trains the forest in Julia; unlike the networks, the model is trained
+each time, on the known sites of the area.
+\begin{itemize}
+\item \textbf{Scenes.} \fn{sentinel\_scenes} finds the Level-2A scenes over the area in Earth Search's catalogue,
+  which serves Cloud-Optimised GeoTIFFs without an account, below a share of clouds over the scene.
+\item \textbf{Composite.} \fn{sentinel\_composite} warps each scene's ten bands of 10 and 20 m (\nmcite{drusch2012}{Drusch
+  and 14 coauthors, 2012}) onto one grid of 10 m in the UTM zone of the area, the nearest cell for the bands of 20 m,
+  reading only the cells of the area, several scenes at once. A cell is left out of a scene where its scene
+  classification marks no data, saturation, cloud shadow, cloud of medium or high probability or cirrus; the
+  composite is the mean of the rest, saved as a GeoTIFF.
+\item \textbf{Training.} \fn{site\_cells} marks the cells of the known sites, from polygons or from points and lines
+  with a radius. \fn{forest\_model} trains 128 trees of DecisionTree.jl on them and on ten times as many cells drawn
+  at random at least 500 m from every site, each tree on half the cells drawn with replacement, choosing at each split
+  among three of the ten bands: the defaults of Earth Engine's random forest, which the article does not say it
+  changed.
+\item \textbf{Probability and features.} \fn{forest\_probability} gives each cell the share of trees that vote for a
+  site; \fn{forest\_features} joins the cells at or above 0.55, the article's threshold, through their sides.
+\item \textbf{Differences from the article.} Level-2A, the surface reflectance, in place of the article's Level-1C;
+  no Sentinel-1; negatives drawn at random in place of polygons drawn by hand; one round of training in place of
+  three.
+\end{itemize}
+
+\nmsub{Use}
+{\small\begin{verbatim}
+scenes = sentinel_scenes(box; years = 2023:2025, cloud = 30)
+composite = sentinel_composite(scenes, box; path = "composite.tif")
+sites = site_cells(composite, "known-sites.gpkg"; radius = 50)
+model = forest_model(composite, sites)
+probability = forest_probability(model, composite)
+found = forest_features(probability; threshold = 0.55)
+\end{verbatim}
+}
+
+\nmsection{The Enki port}
+\nmcite{rosati2025b}{Rosati (2025b)} trained Enki to tell images of cells of about 350 by 350 m that hold a tell or a
+mound-like feature of the Ancient Near East from images that do not, on more than 21,500 images cut from Google and
+Bing imagery (\nmcite{rosati2025a}{Rosati, 2025a}). Its network is EfficientNet-B0 (\nmcite{tan2019}{Tan and Le,
+2019}) as Keras builds it, started from ImageNet, with its channels averaged and two dense layers on top.
+\begin{itemize}
+\item \textbf{Weights.} \fn{enki\_weights} downloads \texttt{enki0\_0.keras} from a fixed commit of Enki's repository.
+  It is a ZIP file: \texttt{config.json} names the layers in order, and \texttt{model.weights.h5}, which JLD2.jl reads,
+  numbers each kind of layer in that order. Their axes are reversed for NNlib.jl.
+\item \textbf{Network.} Keras's scaling by ImageNet's means and standard deviations, inside the network; a stem
+  convolution of stride 2; sixteen blocks of expansion, depthwise convolution, squeeze and excitation, and projection,
+  with the input added back where a block keeps its size; a top convolution of 1,280 channels, averaged over the 11 by
+  11 positions; a dense layer of 256 units and one of two classes. Batch normalisations, with Keras's $\epsilon$ of
+  0.001, are folded into the convolutions.
+\item \textbf{Padding.} The convolutions of stride 2 pad as Keras padded them for an image of 350 pixels, one cell
+  more on the right and bottom than on the left and top for some, as \texttt{config.json} states.
+\item \textbf{Grid.} \fn{aerial\_image} warps imagery to 1 m in the UTM zone of the area; \fn{enki\_pooled} cuts it
+  into cells of 350 pixels from the north-west corner and gives each cell's 1,280 channels; \fn{enki\_probability}
+  applies the dense layers, the share of the second class being the share for a tell.
+\item \textbf{Training again.} \fn{enki\_finetune} trains the two dense layers from Enki's weights, the network
+  beneath unchanged, as the first stage of Enki's training script does: Adam at a learning rate of 0.0001, the
+  cross-entropy of the two classes, batches of 128, a dropout of 0.3, 15 epochs, a fifth of the images kept out and
+  the layers of the epoch with the lowest loss on them kept. The gradients are written out by hand. Enki's second
+  stage, which trains part of the network too, is left out.
+\item \textbf{Features.} \fn{enki\_features} joins the cells at or above a threshold through their sides, 0.99 by
+  default, the threshold of Enki's README. With \texttt{share}, it keeps instead that share of the cells with imagery,
+  those of highest share first: the dense layers trained again give shares on a scale of their own, which stay below
+  0.99 (see below).
+\end{itemize}
+
+\nmsub{Use}
+{\small\begin{verbatim}
+using ArchaeologicalDetection, Rasters, ArchGDAL
+
+enki = enki_model(enki_weights("models"))
+image = aerial_image(box; source = :esri, path = "image.tif")
+cells = enki_pooled(enki, image)
+probability = enki_probability(enki, cells)
+found = enki_features(probability; threshold = 0.99)
+
+points = site_points(image, "known-sites.gpkg")
+examples = enki_examples(enki, image, cells, points)
+tuned = enki_finetune(enki, examples.pooled, examples.labels)
+probability = enki_probability(tuned.model, cells)
+found = enki_features(probability; share = 0.1)
+\end{verbatim}
+}
+
 \nmsection{How it was checked}
 A port is faithful when it gives what the original network gives on the same input. On 22 November 2026 the HRNet
 was run in Julia and in PyTorch on one tile, and on 23 November 2026 the Faster R-CNN in Julia and in torchvision on
-the same tile.
+the same tile, and Enki in Julia and in Keras on eight images. On the same day Enki was trained again on known sites of one half of
+an area and scored on those of the other, to see whether training again helps.
 \begin{valuetable}{@{}P{25mm} L@{}}
  & The comparison \\ \midrule
 Data & The north-west 1024 by 1024 cells of a 1 m terrain model around Wandlebury Ring, south-east of Cambridge, from the LIDAR Composite DTM (\nmcite{ea2022}{Environment Agency, 2022}) \\
@@ -158,6 +250,67 @@ Largest absolute difference in score & \multicolumn{2}{r@{}}{$5\times10^{-6}$} \
 Boxes rounded to whole cells, as ADAF rounds them & \multicolumn{2}{r@{}}{the same three} \\
 \end{valuetable}
 
+\nmsub{Enki against Keras}
+\begin{valuetable}{@{}P{25mm} L@{}}
+ & The comparison \\ \midrule
+Data & Eight images of 350 by 350 pixels of Enki's validation set (\nmcite{rosati2025a}{Rosati, 2025a}): the first four, by name, of its tells in agricultural areas, and the first four of its negatives \\
+Input & The pixels read once, from 0 to 255, and given to both networks as the same array of single-precision numbers \\
+Model & \texttt{enki0\_0.keras} of Enki's repository at commit e47ea9a, the same file in both \\
+Reference & Keras 3.8.0, the version that saved the file, on JAX 0.12.1, the file loaded with \texttt{safe\_mode} \\
+Julia & Julia 1.13.3, NNlib.jl 0.9.61, JLD2.jl 0.6.7 and ZipArchives.jl 2.6.1, on the processor \\
+\end{valuetable}
+
+\vspace{4pt}
+\begin{valuetable}{@{}L >{\raggedleft\arraybackslash}p{36mm} >{\raggedleft\arraybackslash}p{36mm}@{}}
+Share for a tell & Julia & Keras \\ \midrule
+Tell, output\_104\_25 & 0.9517367 & 0.9517368 \\
+Tell, output\_114\_33 & 0.99981886 & 0.99981886 \\
+Tell, output\_118\_34 & 0.9999981 & 0.9999981 \\
+Tell, output\_119\_40 & 0.9994956 & 0.9994956 \\
+Negative, output\_1061\_neg & 0.00059998606 & 0.0005999906 \\
+Negative, output\_1062\_neg & 0.00039327896 & 0.00039328082 \\
+Negative, output\_1063\_neg & 0.0009125063 & 0.00091250805 \\
+Negative, output\_1064\_neg & 0.00043141117 & 0.00043141202 \\ \midrule
+Largest absolute difference in share & \multicolumn{2}{r@{}}{$1.2\times10^{-7}$} \\
+Largest absolute difference in the 1,280 averaged channels & \multicolumn{2}{r@{}}{$2.6\times10^{-6}$} \\
+Largest averaged channel, in absolute value & \multicolumn{2}{r@{}}{1.89} \\
+\end{valuetable}
+
+\nmsub{Enki trained again on known sites}
+Enki was trained on tells of arid ground; the terps of the north of the Netherlands, mounds raised against the sea on
+wet, green land, are far from that ground. The protected monuments of an area of Groningen were split at a column of
+cells into a western and an eastern half, with about as many in each. \fn{enki\_finetune} was trained on the
+monuments of one half, with its negatives drawn from cells of that half, and both models were scored on the
+monuments of the other half, each by the cell that holds its centre; then the halves were swapped. Each training
+was run with five seeds.
+\begin{valuetable}{@{}P{25mm} L@{}}
+ & The measurement \\ \midrule
+Data & The area from 6.42 to 6.64\,°E and 53.22 to 53.35\,°N: the current aerial photograph of 25 cm of the Netherlands (\nmcite{bmn2026}{Beeldmateriaal Nederland, 2026}), warped by \fn{aerial\_image} to 15,164 by 14,967 cells of 1 m, 1,806 cells of 350 m; and the 101 archaeological monuments of the area among the protected sites of the Rijksdienst voor het Cultureel Erfgoed (\nmcite{rce2026}{2026}), in 89 cells \\
+Training & \fn{enki\_examples} with its defaults: nine images of each monument of the training half, the centre and the eight points 50 m away, 423 and 480 in all; five cells for each image at least 700 m from those monuments, as many as the half holds, 508 and 648; then \fn{enki\_finetune} with its defaults \\
+Scores & On the cells of the other half: the share of its monuments whose cell is among the 5, 10 or 20\% of the cells of highest share; the same at the share of cells Enki as published keeps at 0.99; and the AUC, the chance that the cell of a monument has a higher share than a cell without one \\
+Julia & Julia 1.13.3, NNlib.jl 0.9.61, Rasters.jl 0.15.0 and ArchGDAL.jl 0.10.12, on the processor \\
+\end{valuetable}
+
+\vspace{4pt}
+\begin{valuetable}{@{}L >{\raggedleft\arraybackslash}p{19mm} >{\raggedleft\arraybackslash}p{19mm} >{\raggedleft\arraybackslash}p{19mm} >{\raggedleft\arraybackslash}p{19mm} >{\raggedleft\arraybackslash}p{23mm}@{}}
+Monuments found & 5\% & 10\% & 20\% & AUC & At 0.99's share \\ \midrule
+\multicolumn{6}{@{}l}{\textit{Trained on the west, scored on the east: 54 monuments, 1,008 cells}} \\
+Enki as published & 0.241 & 0.333 & 0.537 & 0.700 & 0.204 \\
+Trained again, five seeds & 0.204--0.259 & 0.389--0.426 & 0.537--0.611 & 0.753--0.760 & 0.167--0.204 \\ \midrule
+\multicolumn{6}{@{}l}{\textit{Trained on the east, scored on the west: 47 monuments, 798 cells}} \\
+Enki as published & 0.085 & 0.170 & 0.404 & 0.692 & 0.128 \\
+Trained again, five seeds & 0.255 & 0.277--0.319 & 0.489--0.532 & 0.764--0.780 & 0.277 \\
+\end{valuetable}
+
+\vspace{4pt}
+In all ten trainings, the cells of the held-out monuments rank higher than with Enki as published: the AUC rises by
+0.05 to 0.09. With a tenth of the cells kept, training again finds 0.39 to 0.43 of the monuments in place of 0.33 on
+the east, and 0.28 to 0.32 in place of 0.17 on the west. Among the very highest cells it helps on the west only:
+there, Enki as published keeps 6.5\% of the cells at 0.99, and finds 0.128 of the monuments, training again 0.277 in
+as many cells; on the east, at 2.9\%, training again finds 0.167 to 0.204, against 0.204. Enki as published gives
+0.99 or more to 29 cells of the eastern half and 52 of the western, Enki trained again to none and to one, which is why \fn{enki\_features} takes a share for it. The
+epoch with the lowest loss on the images kept out was the fifteenth, the last, in every training.
+
 \nmsub{What the check does not cover}
 \begin{itemize}
 \item \textbf{The other three models.} Barrows, enclosures and ringforts were not compared, for either network.
@@ -166,20 +319,35 @@ Boxes rounded to whole cells, as ADAF rounds them & \multicolumn{2}{r@{}}{the sa
 \item \textbf{The features.} \fn{adaf\_features} follows ADAF's rules, and its features were not compared with the
   polygons ADAF writes. For Faster R-CNN, boxes that touch across the edge of a tile become one feature, where ADAF
   keeps two.
-\item \textbf{Detection itself.} Agreement with PyTorch says that the port is faithful. It says nothing of how well
-  the models detect archaeology, and it does not replicate the evaluation in the article.
+\item \textbf{The random forest.} There is no reference to compare it with: the article's forest ran in Earth Engine,
+  on other scenes and with Sentinel-1. It was run from the scenes to the features, and its composite was checked to
+  lie on the grid GDAL gives the same area, but its map was not compared with the article's.
+\item \textbf{Enki's grid and training again.} \fn{aerial\_image}, the grid of cells and \fn{enki\_finetune} were
+  not compared with Enki's own workflow, which exports one image a cell from QGIS and trains in Keras. Training again
+  was measured on one area of terps, not on tells, and the protected monuments, which carry no names, are not all
+  terps.
+\item \textbf{Detection itself.} Agreement with PyTorch and Keras says that the ports are faithful. It says nothing of
+  how well the models detect archaeology, and it does not replicate the evaluations of ADAF's article or of Enki.
 \end{itemize}
 
 \nmsection{References}
 {\footnotesize\raggedright\setlength{\parskip}{1pt}
+\nmref{bmn2026}{Beeldmateriaal Nederland (2026). Luchtfoto Actueel Ortho 25 cm RGB. Dataset, served by PDOK. \href{https://service.pdok.nl/hwh/luchtfotorgb/wms/v1_0}{\color{pblue}service.pdok.nl/hwh/luchtfotorgb}}
+\nmref{breiman2001}{Breiman, L. (2001). Random forests. \emph{Machine Learning}, 45(1), 5--32. \nmdoi{10.1023/A:1010933404324}}
 \nmref{coz2026}{Čož, N., Corns, A., Curran, S., Kocev, D. and Kokalj, Ž. (2026). Automatic detection of archaeological features from airborne laser scanning data using deep learning: development and evaluation of the ADAF tool. \emph{Journal of Archaeological Science: Reports}, 71, 105733. \nmdoi{10.1016/j.jasrep.2026.105733}}
 \nmref{dimitrovski2023}{Dimitrovski, I., Kitanovski, I., Panov, P., Kostovska, A., Simidjievski, N. and Kocev, D. (2023). AiTLAS: artificial intelligence toolbox for Earth observation. \emph{Remote Sensing}, 15(9), 2343. \nmdoi{10.3390/rs15092343}}
+\nmref{drusch2012}{Drusch, M., Del Bello, U., Carlier, S., Colin, O., Fernandez, V., Gascon, F., Hoersch, B., Isola, C., Laberinti, P., Martimort, P., Meygret, A., Spoto, F., Sy, O., Marchese, F. and Bargellini, P. (2012). Sentinel-2: ESA's optical high-resolution mission for GMES operational services. \emph{Remote Sensing of Environment}, 120, 25--36. \nmdoi{10.1016/j.rse.2011.11.026}}
 \nmref{ea2022}{Environment Agency (2022). LIDAR Composite Digital Terrain Model (DTM) -- 1m. Dataset. \href{https://environment.data.gov.uk/dataset/13787b9a-26a4-4775-8523-806d13af58fc}{\color{pblue}environment.data.gov.uk}}
 \nmref{he2016}{He, K., Zhang, X., Ren, S. and Sun, J. (2016). Deep residual learning for image recognition. \emph{Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition}, 770--778. \nmdoi{10.1109/CVPR.2016.90}}
 \nmref{hesse2010}{Hesse, R. (2010). LiDAR-derived local relief models -- a new tool for archaeological prospection. \emph{Archaeological Prospection}, 17(2), 67--72. \nmdoi{10.1002/arp.374}}
 \nmref{kostovska2025}{Kostovska, A., Kocev, D., Čož, N., Kokalj, Ž., Curran, S. and Corns, A. (2025). ADAF machine learning model weights. Dataset, version 1.0.0. \nmdoi{10.5281/zenodo.15848663}}
 \nmref{lin2017}{Lin, T.-Y., Dollár, P., Girshick, R., He, K., Hariharan, B. and Belongie, S. (2017). Feature pyramid networks for object detection. \emph{Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition}, 936--944. \nmdoi{10.1109/CVPR.2017.106}}
+\nmref{orengo2020}{Orengo, H. A., Conesa, F. C., Garcia-Molsosa, A., Lobo, A., Green, A. S., Madella, M. and Petrie, C. A. (2020). Automated detection of archaeological mounds using machine-learning classification of multisensor and multitemporal satellite data. \emph{Proceedings of the National Academy of Sciences}, 117(31), 18240--18250. \nmdoi{10.1073/pnas.2005583117}}
+\nmref{rce2026}{Rijksdienst voor het Cultureel Erfgoed (2026). Beschermde gebieden cultuurhistorie. Dataset, served by PDOK. \href{https://api.pdok.nl/rce/beschermde-gebieden-cultuurhistorie/ogc/v1}{\color{pblue}api.pdok.nl/rce/beschermde-gebieden-cultuurhistorie}}
 \nmref{ren2017}{Ren, S., He, K., Girshick, R. and Sun, J. (2017). Faster R-CNN: towards real-time object detection with region proposal networks. \emph{IEEE Transactions on Pattern Analysis and Machine Intelligence}, 39(6), 1137--1149. \nmdoi{10.1109/TPAMI.2016.2577031}}
+\nmref{rosati2025a}{Rosati, P. (2025a). Enki: AI for Archaeology -- Datasets for Automatic Site Recognition. Dataset. \nmdoi{10.5281/zenodo.14950564}}
+\nmref{rosati2025b}{Rosati, P. (2025b). Enki: AI-Assistant for Archaeological Discoveries. Software and trained model. \href{https://github.com/archeorosati/enki}{\color{pblue}github.com/archeorosati/enki}}
+\nmref{tan2019}{Tan, M. and Le, Q. V. (2019). EfficientNet: rethinking model scaling for convolutional neural networks. \emph{Proceedings of the 36th International Conference on Machine Learning}, PMLR 97, 6105--6114. \href{https://proceedings.mlr.press/v97/tan19a.html}{\color{pblue}proceedings.mlr.press}}
 \nmref{wang2021}{Wang, J., Sun, K., Cheng, T., Jiang, B., Deng, C., Zhao, Y., Liu, D., Mu, Y., Tan, M., Wang, X., Liu, W. and Xiao, B. (2021). Deep high-resolution representation learning for visual recognition. \emph{IEEE Transactions on Pattern Analysis and Machine Intelligence}, 43(10), 3349--3364. \nmdoi{10.1109/TPAMI.2020.2983686}}
 \nmref{wightman2019}{Wightman, R. (2019). PyTorch Image Models. \nmdoi{10.5281/zenodo.4414861}}
 }
