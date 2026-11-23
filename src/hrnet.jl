@@ -120,7 +120,8 @@ end
 
 function adaf_model(path::AbstractString)
 	sd = Pickle.Torch.THload(path)["state_dict"]
-	stem = [folded(sd, "backbone.conv1", "backbone.bn1"; stride = 2), folded(sd, "backbone.conv2", "backbone.bn2"; stride = 2)]
+	haskey(sd, "backbone.body.conv1.weight") && return detector(sd)  # a Faster R-CNN model (fasterrcnn.jl)
+	stem =[folded(sd, "backbone.conv1", "backbone.bn1"; stride = 2), folded(sd, "backbone.conv2", "backbone.bn2"; stride = 2)]
 	modules(s) = [hrmodule(sd, "backbone.stage$(s).$(m)") for m in upto(m -> has(sd, "backbone.stage$(s).$(m).branches.0.0.conv1"))]
 	return ADAFModel(stem, blocks(sd, "backbone.layer1"), [transition(sd, "backbone.transition$(s)", s + 1) for s in 1:3], [modules(s) for s in 2:4],
 		[folded(sd, "head.projection.0", "head.projection.1"), folded(sd, "head.projection.3", nothing)])

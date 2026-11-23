@@ -1,25 +1,33 @@
 # The trained models of ADAF, the Automatic Detection of Archaeological Features tool (Čož, Corns, Curran, Kocev and
-# Kokalj 2026), applied as ADAF applies them: HRNet segmentation models trained on lidar of Ireland, whose input is
-# the simple local relief model and whose output is the probability of an archaeological feature at each cell. The
-# network itself is in hrnet.jl; here are the weights, the input and the features.
+# Kokalj 2026), applied as ADAF applies them: HRNet segmentation and Faster R-CNN object detection models trained on
+# lidar of Ireland, whose input is the simple local relief model and whose output is the probability of an
+# archaeological feature at each cell, or boxes with their scores. The networks themselves are in hrnet.jl and
+# fasterrcnn.jl; here are the weights, the input and the features.
 
 const ADAF_RECORD = "https://zenodo.org/records/15848663/files/"
 const ADAF_FILES = Dict(
-	:all => "AO_HRNet_SLRM_512px_pretrained_train_12_val_124_with_Transformation.tar",
-	:barrow => "barrow_HRNet_SLRM_512px_pretrained_train_12_val_124_with_Transformation.tar",
-	:enclosure => "enclosure_HRNet_SLRM_512px_pretrained_train_12_val_124_with_Transformation.tar",
-	:ringfort => "ringfort_HRNet_SLRM_512px_pretrained_train_12_val_124_with_Transformation.tar",
+	(:hrnet, :all) => "AO_HRNet_SLRM_512px_pretrained_train_12_val_124_with_Transformation.tar",
+	(:hrnet, :barrow) => "barrow_HRNet_SLRM_512px_pretrained_train_12_val_124_with_Transformation.tar",
+	(:hrnet, :enclosure) => "enclosure_HRNet_SLRM_512px_pretrained_train_12_val_124_with_Transformation.tar",
+	(:hrnet, :ringfort) => "ringfort_HRNet_SLRM_512px_pretrained_train_12_val_124_with_Transformation.tar",
+	(:fasterrcnn, :all) => "OD_AO.tar",
+	(:fasterrcnn, :barrow) => "OD_barrow.tar",
+	(:fasterrcnn, :enclosure) => "OD_enclosure.tar",
+	(:fasterrcnn, :ringfort) => "OD_ringfort.tar",
 )
 
 """
-    adaf_weights(folder; feature = :all)
+    adaf_weights(folder; feature = :all, network = :hrnet)
 
-The file of ADAF's trained segmentation model for `feature`, downloaded once from its Zenodo record (about 860 MB) to
-`folder/adaf` and returned from there later: `:all` (all archaeology), `:barrow`, `:enclosure` or `:ringfort`.
+The file of ADAF's trained model for `feature`, downloaded once from its Zenodo record to `folder/adaf` and returned
+from there later: `:all` (all archaeology), `:barrow`, `:enclosure` or `:ringfort`, of the `network` `:hrnet` (the
+segmentation models, about 860 MB) or `:fasterrcnn` (the object detection models, about 520 MB).
 """
-function adaf_weights(folder::AbstractString; feature::Symbol = :all)
-	haskey(ADAF_FILES, feature) || throw(ArgumentError("feature is one of $(join(sort(collect(keys(ADAF_FILES))), ", "))"))
-	return cached(ADAF_RECORD * ADAF_FILES[feature] * "?download=1", joinpath(folder, "adaf", ADAF_FILES[feature]))
+function adaf_weights(folder::AbstractString; feature::Symbol = :all, network::Symbol = :hrnet)
+	network in (:hrnet, :fasterrcnn) || throw(ArgumentError("network is hrnet or fasterrcnn"))
+	haskey(ADAF_FILES, (network, feature)) || throw(ArgumentError("feature is one of all, barrow, enclosure, ringfort"))
+	file = ADAF_FILES[(network, feature)]
+	return cached(ADAF_RECORD * file * "?download=1", joinpath(folder, "adaf", file))
 end
 
 """
@@ -38,8 +46,8 @@ end
 """
     adaf_model(path)
 
-ADAF's trained segmentation model read from `path` (see [`adaf_weights`](@ref)), ready for
-[`adaf_probability`](@ref).
+ADAF's trained model read from `path` (see [`adaf_weights`](@ref)), a segmentation or an object detection model as
+the file holds, ready for [`adaf_probability`](@ref) and, for an object detection model, [`adaf_boxes`](@ref).
 """
 function adaf_model end
 
@@ -48,7 +56,7 @@ function adaf_model end
 
 The probability of an archaeological feature at each cell of `image` (see [`adaf_input`](@ref)), from ADAF's model
 `model`, run as ADAF runs it: on tiles of `tile` cells from the first cell of the matrix, the image beyond the last
-tile filled with 0.
+tile filled with 0. For a Faster R-CNN model, the score of the best box covering each cell.
 """
 function adaf_probability end
 
@@ -76,6 +84,9 @@ feature has its `id`, the position `i`, `j` of its centre, its `area`, its `roun
 the area over the squared perimeter of its convex hull: 1 for a circle, 0.785 for a square) and its highest
 `probability`. Features of area up to `min_area` or roundness up to `min_roundness` are left out. Returns
 `candidates` and `labels`, their cells.
+
+For the scores of a Faster R-CNN model, ADAF joins the boxes above the threshold and leaves no cells out along the edges
+of the tiles: `margin = 0`.
 """
 function adaf_features(probability::AbstractMatrix{<:Real}, cellsize; threshold::Real = 0.5, min_area::Real = 0, min_roundness::Real = 0, tile::Integer = 1024, margin::Integer = 8)
 	h = cellwidth(cellsize)

@@ -44,34 +44,36 @@
 
 \nmhead{Archaeological Prospection}
   {ArchaeologicalDetection: trained networks for archaeological prospection in Julia}
-  {The HRNet segmentation models of ADAF, applied to lidar terrain models without Python}
+  {The HRNet segmentation and Faster R-CNN object detection models of ADAF, applied to lidar terrain models without Python}
 
 \factsheet
   {To apply trained neural networks to a terrain model and draw from their output the features to examine as possible
    archaeology.}
-  {The four HRNet segmentation models of ADAF, the Automatic Detection of Archaeological Features tool: all archaeology,
-   barrows, enclosures and ringforts.}
+  {The four HRNet segmentation and four Faster R-CNN object detection models of ADAF, the Automatic Detection of
+   Archaeological Features tool: all archaeology, barrows, enclosures and ringforts.}
   {\package{ArchaeologicalDetection}{https://github.com/Trumpingtons/ArchaeologicalDetection.jl}, MIT. It computes
    with NNlib.jl, reads the weights with Pickle.jl, and takes terrain models read with Rasters.jl.}
-  {The network against PyTorch on 1,048,576 cells: 22,290 reach a probability of 0.5 in Julia and 22,290 in PyTorch,
-   and no cell differs on that side of 0.5. The largest difference in probability is 0.0000751.}
+  {HRNet against PyTorch on 1,048,576 cells: 22,290 reach a probability of 0.5 in Julia and 22,290 in PyTorch, and no
+   cell differs on that side of 0.5; the largest difference in probability is 0.0000751. Faster R-CNN against
+   torchvision: the same three boxes, their sides within 0.000062 cells and their scores within 0.000005.}
 
 \nmsection{The models}
 \nmcite{coz2026}{Čož, Corns, Curran, Kocev and Kokalj (2026)} trained neural networks to find enclosures, ringforts and
 barrows in airborne laser scanning data of Ireland, labelled by experts, at cells of 0.5 m, and made them available in
 ADAF. \nmcite{kostovska2025}{Kostovska, Kocev, Čož, Kokalj, Curran and Corns (2025)} published the weights: four models
 for semantic segmentation, which give the probability that each cell belongs to a feature, and four for object
-detection, which give boxes with scores. This package runs the four segmentation models. A trained model recognises
+detection, which give boxes with scores. This package runs all eight. A trained model recognises
 forms like those it was shown, so what it finds elsewhere are places to check.
 
 \nmsection{From a terrain model to features}
 \begin{valuetable}{@{}P{25mm} P{36mm} L@{}}
 Step & Function & What it computes \\ \midrule
-Weights & \fn{adaf\_weights} & The file of one of the four models, about 860 MB, downloaded once from Zenodo \\
+Weights & \fn{adaf\_weights} & The file of one of the eight models, 520 to 860 MB, downloaded once from Zenodo \\
 Input & \fn{adaf\_input} & The simple local relief model (\nmcite{hesse2010}{Hesse, 2010}) with a radius of 10 cells, or 10 m for cells finer than 1 m, clipped to $-0.5$ to 0.5 m and stretched onto 0 to 1; 0 where it is undefined \\
-Network & \fn{adaf\_model} & The HRNet with the weights of the file \\
-Probability & \fn{adaf\_probability} & The network on tiles of 1024 by 1024 cells from the north-west corner, filled with 0 beyond the terrain model \\
-Features & \fn{adaf\_features} & The cells with a probability of at least the threshold, without the 8 cells along the edges of each tile, joined through their sides; each feature's area, roundness and highest probability, and the filters on area and roundness \\
+Network & \fn{adaf\_model} & The HRNet or the Faster R-CNN, as the file holds, with its weights \\
+Boxes & \fn{adaf\_boxes} & Faster R-CNN only: the boxes and their scores, on the tiles of the next step \\
+Probability & \fn{adaf\_probability} & The network on tiles of 1024 by 1024 cells from the north-west corner, filled with 0 beyond the terrain model; for Faster R-CNN, the score of the best box over each cell \\
+Features & \fn{adaf\_features} & The cells with a probability of at least the threshold, without the 8 cells along the edges of each tile (none for Faster R-CNN, with \texttt{margin = 0}), joined through their sides; each feature's area, roundness and highest probability, and the filters on area and roundness \\
 \end{valuetable}
 
 \nmsub{Use}
@@ -107,16 +109,35 @@ convolutions of NNlib.jl.
   without aligning the corners.
 \end{itemize}
 
+\nmsection{The Faster R-CNN port}
+ADAF's object detection models are torchvision's improved Faster R-CNN (\nmcite{ren2017}{Ren, He, Girshick and Sun,
+2017}): a ResNet-50 (\nmcite{he2016}{He, Zhang, Ren and Sun, 2016}) under a feature pyramid
+(\nmcite{lin2017}{Lin, Dollár, Girshick, He, Hariharan and Belongie, 2017}), with two classes, the feature and the
+background.
+\begin{itemize}
+\item \textbf{Network.} The ResNet-50 and a pyramid of five levels; a region proposal network of two convolutions over
+  anchors of 32 to 512 cells in three shapes; RoIAlign to 7 by 7 cells; a box head of four convolutions and a layer of
+  1,024. Batch normalisations are folded as in HRNet.
+\item \textbf{Image.} Each tile repeated into three bands, normalised with ImageNet's means and standard deviations
+  and resized to 800 cells a side by bilinear interpolation, as torchvision does.
+\item \textbf{Selection.} torchvision's: the 1,000 best anchors of each level, suppressions at overlaps of 0.7 and
+  0.5, scores above 0.05, at most 100 boxes; then AiTLAS's suppression at 0.2. RoIAlign and the suppressions follow
+  torchvision's code for the processor.
+\item \textbf{Score map.} \fn{adaf\_probability} gives each cell the score of the best box over it, the boxes rounded
+  to whole cells as ADAF rounds them, so the cells at or above a threshold are those of the boxes ADAF keeps.
+\end{itemize}
+
 \nmsection{How it was checked}
-A port is faithful when it gives what the original network gives on the same input. On 22 November 2026 the network
-was run in Julia and in PyTorch on one tile.
+A port is faithful when it gives what the original network gives on the same input. On 22 November 2026 the HRNet
+was run in Julia and in PyTorch on one tile, and on 23 November 2026 the Faster R-CNN in Julia and in torchvision on
+the same tile.
 \begin{valuetable}{@{}P{25mm} L@{}}
  & The comparison \\ \midrule
 Data & The north-west 1024 by 1024 cells of a 1 m terrain model around Wandlebury Ring, south-east of Cambridge, from the LIDAR Composite DTM (\nmcite{ea2022}{Environment Agency, 2022}) \\
 Input & Computed once, by \fn{adaf\_input}, and given to both networks as the same array of single-precision numbers \\
 Model & All Archaeology, the same checkpoint in both \\
-Reference & PyTorch 2.15.0, with the HRNet of PyTorch Image Models 1.0.31 and the forward pass and head of AiTLAS written out from its source; the checkpoint loaded with no missing and no unexpected key \\
-Julia & Julia 1.13.3, NNlib.jl 0.9.60 and Pickle.jl 0.3.7, on the processor \\
+Reference & PyTorch 2.15.0, with the HRNet of PyTorch Image Models 1.0.31 and the forward pass and head of AiTLAS written out from its source; the checkpoint loaded with no missing and no unexpected key. For Faster R-CNN: torchvision 0.27.1 on PyTorch 2.12.1, its model loaded with the checkpoint, then AiTLAS's suppression \\
+Julia & Julia 1.13.3, NNlib.jl 0.9.60 and Pickle.jl 0.3.7 (0.9.61 and 0.3.7 for Faster R-CNN), on the processor \\
 \end{valuetable}
 
 \vspace{4pt}
@@ -128,16 +149,23 @@ Smallest probability & $8.0827025\times10^{-21}$ & $8.0827639\times10^{-21}$ \\
 Largest probability & 1.0 & 1.0 \\ \midrule
 Cells on different sides of 0.5 & \multicolumn{2}{r@{}}{0} \\
 Largest absolute difference in probability & \multicolumn{2}{r@{}}{$7.510185\times10^{-5}$} \\
-Mean absolute difference in probability & \multicolumn{2}{r@{}}{$4.380145\times10^{-8}$} \\
+Mean absolute difference in probability & \multicolumn{2}{r@{}}{$4.380145\times10^{-8}$} \\ \midrule
+Faster R-CNN: boxes found & 3 & 3 \\
+Highest score & 0.721079 & 0.721084 \\
+Lowest score & 0.069049 & 0.069048 \\ \midrule
+Largest absolute difference in the sides of the boxes, in cells & \multicolumn{2}{r@{}}{$6.2\times10^{-5}$} \\
+Largest absolute difference in score & \multicolumn{2}{r@{}}{$5\times10^{-6}$} \\
+Boxes rounded to whole cells, as ADAF rounds them & \multicolumn{2}{r@{}}{the same three} \\
 \end{valuetable}
 
 \nmsub{What the check does not cover}
 \begin{itemize}
-\item \textbf{The other three models.} Barrows, enclosures and ringforts were not compared.
+\item \textbf{The other three models.} Barrows, enclosures and ringforts were not compared, for either network.
 \item \textbf{The input image.} Both networks read the image computed in Julia, which was not compared with the image
   ADAF computes.
 \item \textbf{The features.} \fn{adaf\_features} follows ADAF's rules, and its features were not compared with the
-  polygons ADAF writes.
+  polygons ADAF writes. For Faster R-CNN, boxes that touch across the edge of a tile become one feature, where ADAF
+  keeps two.
 \item \textbf{Detection itself.} Agreement with PyTorch says that the port is faithful. It says nothing of how well
   the models detect archaeology, and it does not replicate the evaluation in the article.
 \end{itemize}
@@ -147,8 +175,11 @@ Mean absolute difference in probability & \multicolumn{2}{r@{}}{$4.380145\times1
 \nmref{coz2026}{Čož, N., Corns, A., Curran, S., Kocev, D. and Kokalj, Ž. (2026). Automatic detection of archaeological features from airborne laser scanning data using deep learning: development and evaluation of the ADAF tool. \emph{Journal of Archaeological Science: Reports}, 71, 105733. \nmdoi{10.1016/j.jasrep.2026.105733}}
 \nmref{dimitrovski2023}{Dimitrovski, I., Kitanovski, I., Panov, P., Kostovska, A., Simidjievski, N. and Kocev, D. (2023). AiTLAS: artificial intelligence toolbox for Earth observation. \emph{Remote Sensing}, 15(9), 2343. \nmdoi{10.3390/rs15092343}}
 \nmref{ea2022}{Environment Agency (2022). LIDAR Composite Digital Terrain Model (DTM) -- 1m. Dataset. \href{https://environment.data.gov.uk/dataset/13787b9a-26a4-4775-8523-806d13af58fc}{\color{pblue}environment.data.gov.uk}}
+\nmref{he2016}{He, K., Zhang, X., Ren, S. and Sun, J. (2016). Deep residual learning for image recognition. \emph{Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition}, 770--778. \nmdoi{10.1109/CVPR.2016.90}}
 \nmref{hesse2010}{Hesse, R. (2010). LiDAR-derived local relief models -- a new tool for archaeological prospection. \emph{Archaeological Prospection}, 17(2), 67--72. \nmdoi{10.1002/arp.374}}
 \nmref{kostovska2025}{Kostovska, A., Kocev, D., Čož, N., Kokalj, Ž., Curran, S. and Corns, A. (2025). ADAF machine learning model weights. Dataset, version 1.0.0. \nmdoi{10.5281/zenodo.15848663}}
+\nmref{lin2017}{Lin, T.-Y., Dollár, P., Girshick, R., He, K., Hariharan, B. and Belongie, S. (2017). Feature pyramid networks for object detection. \emph{Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition}, 936--944. \nmdoi{10.1109/CVPR.2017.106}}
+\nmref{ren2017}{Ren, S., He, K., Girshick, R. and Sun, J. (2017). Faster R-CNN: towards real-time object detection with region proposal networks. \emph{IEEE Transactions on Pattern Analysis and Machine Intelligence}, 39(6), 1137--1149. \nmdoi{10.1109/TPAMI.2016.2577031}}
 \nmref{wang2021}{Wang, J., Sun, K., Cheng, T., Jiang, B., Deng, C., Zhao, Y., Liu, D., Mu, Y., Tan, M., Wang, X., Liu, W. and Xiao, B. (2021). Deep high-resolution representation learning for visual recognition. \emph{IEEE Transactions on Pattern Analysis and Machine Intelligence}, 43(10), 3349--3364. \nmdoi{10.1109/TPAMI.2020.2983686}}
 \nmref{wightman2019}{Wightman, R. (2019). PyTorch Image Models. \nmdoi{10.5281/zenodo.4414861}}
 }
