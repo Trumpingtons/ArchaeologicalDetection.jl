@@ -1,7 +1,7 @@
 name = "ArchaeologicalDetection"
 uuid = "e4fab08a-9b87-475a-9a68-5d77bd0061a8"
 authors = ["Antonio Saragga Seabra"]
-version = "0.2.2"
+version = "0.2.3"
 
 [deps]
 DecisionTree = "7806a523-6efd-50cb-b5f6-3fa6f1930dbb"

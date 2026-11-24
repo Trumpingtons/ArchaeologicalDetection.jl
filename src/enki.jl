@@ -107,12 +107,14 @@ dense(layer) = (layer.vars[1], layer.vars[2])  # Keras's kernel (in, out) read r
 squeeze_conv(layer) = (reshape(layer.vars[1], size(layer.vars[1], 1), size(layer.vars[1], 2)), layer.vars[2])
 
 """
-    enki_model(path)
+    enki_model(path; head = nothing)
 
 Enki's trained network read from `path`, its Keras file (see [`enki_weights`](@ref)), without Python: the layers and
-their order from its `config.json`, the weights from its `model.weights.h5`.
+their order from its `config.json`, the weights from its `model.weights.h5`. With `head`, the path of a file written by
+[`enki_save`](@ref), the two dense layers of the head are those of that file, trained again on known sites, and the
+network beneath them is Enki's own.
 """
-function enki_model(path::AbstractString)
+function enki_model(path::AbstractString; head::Union{Nothing, AbstractString} = nothing)
 	zip = ZipArchives.ZipReader(read(path))
 	config = JSON.parse(String(ZipArchives.zip_readentry(zip, "config.json")))
 	h5 = tempname() * ".h5"
@@ -132,13 +134,36 @@ function enki_model(path::AbstractString)
 					squeeze_conv(layers["$(p)_se_expand"]), enki_conv(layers, "$(p)_project_conv", "$(p)_project_bn"), haskey(layers, "$(p)_add"))
 			end
 			top = enki_conv(layers, "top_conv", "top_bn")
-			head(name) = (Array{Float32}(weights["layers/$(name)/vars/0"]), Array{Float32}(weights["layers/$(name)/vars/1"]))
-			EnkiModel(mu, deviation, stem, blocks, top, head("dense"), head("dense_1"))
+			dense_weights(name) = (Array{Float32}(weights["layers/$(name)/vars/0"]), Array{Float32}(weights["layers/$(name)/vars/1"]))
+			EnkiModel(mu, deviation, stem, blocks, top, dense_weights("dense"), dense_weights("dense_1"))
 		end
 	finally
 		rm(h5; force = true)
 	end
-	return model
+	return isnothing(head) ? model : with_head(model, head)
+end
+
+# Enki's network with the head of a file written by enki_save
+function with_head(m::EnkiModel, path::AbstractString)
+	hidden, output = JLD2.jldopen(path, "r") do f
+		(f["hidden_weights"], f["hidden_bias"]), (f["output_weights"], f["output_bias"])
+	end
+	size(hidden[1]) == size(m.hidden[1]) && size(output[1]) == size(m.output[1]) ||
+		error("The head of $(path) has layers of $(size(hidden[1])) and $(size(output[1])), Enki's of $(size(m.hidden[1])) and $(size(m.output[1]))")
+	return EnkiModel(m.mean, m.deviation, m.stem, m.blocks, m.top, (Float32.(hidden[1]), Float32.(hidden[2])), (Float32.(output[1]), Float32.(output[2])))
+end
+
+"""
+    enki_save(path, model)
+
+The head of `model`, its two dense layers, the part that [`enki_finetune`](@ref) trains, written to the JLD2 file
+`path` (about 1.3 MB); the network beneath it, Enki's own, is not written. `enki_model(weights; head = path)` reads
+the model back. Returns `path`.
+"""
+function enki_save(path::AbstractString, m::EnkiModel)
+	mkpath(dirname(abspath(path)))
+	JLD2.jldsave(path; hidden_weights = m.hidden[1], hidden_bias = m.hidden[2], output_weights = m.output[1], output_bias = m.output[2])
+	return path
 end
 
 """

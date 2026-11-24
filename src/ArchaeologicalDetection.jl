@@ -17,7 +17,7 @@ using SmartRegions: local_relief, label_regions, cached, cellwidth
 
 export adaf_weights, adaf_input, adaf_model, adaf_probability, adaf_boxes, adaf_features
 export SENTINEL_BANDS, sentinel_scenes, sentinel_composite, site_cells, forest_model, forest_probability, forest_features
-export ENKI_CELL, aerial_image, site_points, enki_weights, enki_model, enki_pooled, enki_examples, enki_probability, enki_finetune, enki_features
+export ENKI_CELL, aerial_image, site_points, enki_weights, enki_model, enki_pooled, enki_examples, enki_probability, enki_finetune, enki_save, enki_features
 
 include("adaf.jl")
 include("hrnet.jl")

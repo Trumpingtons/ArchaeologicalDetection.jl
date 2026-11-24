@@ -194,6 +194,8 @@ Bing imagery (\nmcite{rosati2025a}{Rosati, 2025a}). Its network is EfficientNet-
   cross-entropy of the two classes, batches of 128, a dropout of 0.3, 15 epochs, a fifth of the images kept out and
   the layers of the epoch with the lowest loss on them kept. The gradients are written out by hand. Enki's second
   stage, which trains part of the network too, is left out.
+\item \textbf{Saving.} \fn{enki\_save} writes the two dense layers of a model to a JLD2 file of about 1.3 MB, and
+  \fn{enki\_model} with \texttt{head} reads them back onto Enki's network, read again from its Keras file.
 \item \textbf{Features.} \fn{enki\_features} joins the cells at or above a threshold through their sides, 0.99 by
   default, the threshold of Enki's README. With \texttt{share}, it keeps instead that share of the cells with imagery,
   those of highest share first: the dense layers trained again give shares on a scale of their own, which stay below

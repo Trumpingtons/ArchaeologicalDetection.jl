@@ -65,6 +65,7 @@ probability = enki_probability(enki, cells)  # Enki as published
 points = site_points(image, "known-sites.gpkg")
 examples = enki_examples(enki, image, cells, points)
 tuned = enki_finetune(enki, examples.pooled, examples.labels)  # or train the dense layers on the known sites
+enki_save("models/tuned-head.jld2", tuned.model)  # the two dense layers; enki_model(weights; head = ...) reads them back
 probability = enki_probability(tuned.model, cells)
 found = enki_features(probability; share = 0.1)  # the tenth of the cells of highest share; threshold = 0.99 for Enki as published
 ```
@@ -72,12 +73,13 @@ found = enki_features(probability; share = 0.1)  # the tenth of the cells of hig
 | Function | Returns |
 |---|---|
 | `enki_weights` | Enki's Keras file, downloaded once |
-| `enki_model` | Enki's network, read from its Keras file |
+| `enki_model` | Enki's network, read from its Keras file, with the head of a file of `enki_save` if given |
 | `aerial_image` | An RGB image of an area at 1 m in its UTM zone, from Esri World Imagery, Google's satellite tiles, a WMS or a raster file |
 | `site_points` | The centres of the features of a vector file, in the coordinates of a raster |
 | `enki_pooled` | The network's 1,280 averaged channels, for images or for every cell of 350 m of an image |
 | `enki_examples` | Images of the known sites and cells away from them, by their channels, to train on |
 | `enki_finetune` | Enki with its two dense layers trained again, and the loss and accuracy of each epoch |
+| `enki_save` | The two dense layers of a model written to a JLD2 file, to read back with `enki_model` |
 | `enki_probability` | The share for a tell, of images or at each cell of 350 m |
 | `enki_features` | The features, with their area, roundness and highest share, and their cells: the cells at or above a threshold, or a share of the cells, those of highest share first |
 
