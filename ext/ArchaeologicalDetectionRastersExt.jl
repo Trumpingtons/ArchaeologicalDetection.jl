@@ -4,7 +4,7 @@
 module ArchaeologicalDetectionRastersExt
 
 using ArchaeologicalDetection, Rasters
-import ArchaeologicalDetection: adaf_input, adaf_probability, adaf_features, forest_model, forest_probability, forest_features, enki_pooled, enki_examples, enki_probability, enki_features
+import ArchaeologicalDetection: adaf_input, adaf_probability, adaf_features, forest_model, forest_probability, forest_features, enki_pooled, enki_examples, enki_probability, enki_features, terrain_raster
 using ArchaeologicalDetection: EnkiModel, ENKI_CELL, enki_head, share_threshold, NNlib, Random
 
 const L = Rasters.Lookups
@@ -213,5 +213,17 @@ raster `labels`: see `enki_features(probability, cellsize)`, also for `share`.
 """
 enki_features(probability::Rasters.AbstractRaster; threshold::Real = 0.99, share::Union{Nothing, Real} = nothing, kw...) =
 	adaf_features(probability; threshold = isnothing(share) ? threshold : share_threshold(probability, share), margin = 0, kw...)
+
+# A grid of a point cloud (x first, from the south-west corner) as a raster north up, as GeoTIFFs usually are, its
+# cells by their centres
+function terrain_raster(grid, crs)
+	nx, ny = size(grid.heights)
+	c = grid.cellsize
+	north = grid.south + ny * c
+	x = X(L.Sampled(range(grid.west + c / 2; step = c, length = nx); sampling = L.Intervals(L.Center()), order = L.ForwardOrdered(), span = L.Regular(c)))
+	y = Y(L.Sampled(range(north - c / 2; step = -c, length = ny); sampling = L.Intervals(L.Center()), order = L.ReverseOrdered(), span = L.Regular(-c)))
+	data = [isnan(v) ? missing : Float32(v) for v in reverse(grid.heights; dims = 2)]
+	return Raster(data, (x, y); crs = crs isa AbstractString ? WellKnownText(crs) : crs, missingval = missing)
+end
 
 end

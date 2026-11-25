@@ -1,6 +1,6 @@
 # ArchaeologicalDetection.jl
 
-Trained models that detect archaeological features, run in Julia: neural networks on lidar terrain models, a random forest on Sentinel-2, and Enki, a classifier of tells on RGB imagery of 1 m.
+Trained models that detect archaeological features, run in Julia: neural networks on lidar terrain models, a random forest on Sentinel-2, and Enki, a classifier of tells on RGB imagery of 1 m; and the terrain model itself, made from a lidar point cloud.
 
 The package holds a port of the HRNet segmentation and Faster R-CNN object detection models of [ADAF](https://github.com/EarthObservation/adaf), the Automatic Detection of Archaeological Features tool of Čož, Corns, Curran, Kocev and Kokalj (2026), [doi:10.1016/j.jasrep.2026.105733](https://doi.org/10.1016/j.jasrep.2026.105733). Each has four models, trained on airborne laser scanning data of Ireland: all archaeology, barrows, enclosures and ringforts. The [weights](https://doi.org/10.5281/zenodo.15848663) are downloaded from Zenodo at first use, about 860 MB an HRNet model and 520 MB a Faster R-CNN model, and read with Pickle.jl without running Python.
 
@@ -27,7 +27,7 @@ With `network = :fasterrcnn`, `adaf_weights` gives an object detection model. It
 
 ## Random Forest on Sentinel-2
 
-After Orengo, Conesa, Garcia-Molsosa, Lobo, Green, Madella and Petrie (2020), [doi:10.1073/pnas.2005583117](https://doi.org/10.1073/pnas.2005583117), who found mounds in Cholistan this way. A multitemporal composite of Sentinel-2 is the mean reflectance of many scenes, each without its cloudy cells, in ten bands at 10 m. A random forest of 128 trees is trained on the cells of known sites and on cells away from them, and gives at every cell the share of its trees that vote for a site. The scenes are those of Level-2A of [Earth Search](https://element84.com/earth-search/), read without an account from Cloud-Optimised GeoTIFFs, only the cells of the area.
+After Orengo and 6 coauthors (2020), [doi:10.1073/pnas.2005583117](https://doi.org/10.1073/pnas.2005583117), who found mounds in Cholistan this way. A multitemporal composite of Sentinel-2 is the mean reflectance of many scenes, each without its cloudy cells, in ten bands at 10 m. A random forest of 128 trees is trained on the cells of known sites and on cells away from them, and gives at every cell the share of its trees that vote for a site. The scenes are those of Level-2A of [Earth Search](https://element84.com/earth-search/), read without an account from Cloud-Optimised GeoTIFFs, only the cells of the area.
 
 ```julia
 using ArchaeologicalDetection, Rasters, ArchGDAL
@@ -82,6 +82,38 @@ found = enki_features(probability; share = 0.1)  # the tenth of the cells of hig
 | `enki_save` | The two dense layers of a model written to a JLD2 file, to read back with `enki_model` |
 | `enki_probability` | The share for a tell, of images or at each cell of 350 m |
 | `enki_features` | The features, with their area, roundness and highest share, and their cells: the cells at or above a threshold, or a share of the cells, those of highest share first |
+
+## Terrain Model from a Point Cloud
+
+A bare-earth terrain model made from the points of a lidar survey. [PDAL](https://pdal.io), through PDAL_jll, reads LAS and LAZ files, local or on the web, and COPC files over the web, only the part within an area, and gathers them into one LAZ file, which LazIO.jl reads into Julia. The ground is kept as the survey classified it, classes 2 and 8, or found again with the progressive morphological filter of Zhang, Chen, Whitman, Shyu, Yan and Zhang (2003), [doi:10.1109/TGRS.2003.810682](https://doi.org/10.1109/TGRS.2003.810682), or the simple morphological filter of Pingel, Clarke and McBride (2013), [doi:10.1016/j.isprsjprs.2012.12.002](https://doi.org/10.1016/j.isprsjprs.2012.12.002), both of Geomorphometry.jl. The cells without ground are filled by inverse distance weighting from the nearest cells with ground, up to a distance, and the ground points of each cell are counted, so that what was filled shows.
+
+```julia
+using ArchaeologicalDetection, Rasters, ArchGDAL
+
+area = (696600, 1968700, 697700, 1970300)  # xmin, ymin, xmax, ymax, in the coordinates of the points
+tiles = index_tiles("/vsizip/MX19_Inomata_TileIndex.zip/MX19_Inomata_TileIndex.shp", area)  # a tile index; or files, a folder, a COPC address
+cloud = fetch_points(tiles, "aguada-fenix.laz"; bounds = area, folder = "tiles")  # written once, read from there later
+info = point_cloud_summary(cloud)
+points = read_points(cloud)
+ground = ground_grid(points, 1.0; bounds = area)  # or find_ground(points, 1.0; method = :zhang, bounds = area)
+terrain = fill_gaps(ground; distance = 10)
+dem = terrain_raster(terrain, EPSG(info.epsg))  # north up
+write("aguada-fenix-dtm.tif", dem; driver = "COG")
+```
+
+| Function | Returns |
+|---|---|
+| `point_cloud_summary` | The number of points, the bounds and the coordinate system of a point cloud, from its header |
+| `index_tiles` | The tiles of a tile index whose polygons cross an area |
+| `fetch_points` | The points of LAS, LAZ and COPC files within an area, gathered into one LAZ file, written once |
+| `read_points` | The points of a LAS or LAZ file |
+| `point_classes` | The number of points of each class |
+| `ground_grid` | The lowest point of the ground classes in each cell, and the number of them |
+| `lowest_grid` | The lowest point of each cell but noise, whatever its class |
+| `find_ground` | The ground found again by Zhang's or Pingel's filter, and the ground points of each cell |
+| `fill_gaps` | The cells without ground filled from the nearest cells with ground, up to a distance, and which were filled |
+| `ground_density` | The ground points a square metre of each cell |
+| `terrain_raster` | A grid of heights as a `Raster`, north up |
 
 ## Vignette
 

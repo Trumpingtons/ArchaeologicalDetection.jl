@@ -5,7 +5,7 @@
 module ArchaeologicalDetectionSentinelExt
 
 using ArchaeologicalDetection, Rasters, ArchGDAL
-import ArchaeologicalDetection: sentinel_composite, site_cells, aerial_image, site_points
+import ArchaeologicalDetection: sentinel_composite, site_cells, aerial_image, site_points, index_tiles
 using ArchaeologicalDetection: SENTINEL_BANDS, CLOUDY_CLASSES, Downloads, JSON
 
 const L = Rasters.Lookups
@@ -206,6 +206,21 @@ function site_points(grid::Rasters.AbstractRaster, sites::AbstractString)
 		end
 	end
 	return [p for p in points if xmin <= p[1] <= xmax && ymin <= p[2] <= ymax]
+end
+
+# The tiles of a tile index whose polygons cross the bounds, by the value of a field
+function index_tiles(index::AbstractString, bounds; field::AbstractString = "URL")
+	xmin, ymin, xmax, ymax = Float64.(bounds)
+	box = ArchGDAL.createpolygon([(xmin, ymin), (xmax, ymin), (xmax, ymax), (xmin, ymax), (xmin, ymin)])
+	tiles = String[]
+	ArchGDAL.read(index) do ds
+		layer = ArchGDAL.getlayer(ds, 0)
+		ArchGDAL.findfieldindex(ArchGDAL.layerdefn(layer), field) >= 0 || throw(ArgumentError("the index has no field $(field)"))
+		for f in layer
+			ArchGDAL.intersects(ArchGDAL.getgeom(f), box) && push!(tiles, string(ArchGDAL.getfield(f, field)))
+		end
+	end
+	return sort!(tiles)
 end
 
 end
