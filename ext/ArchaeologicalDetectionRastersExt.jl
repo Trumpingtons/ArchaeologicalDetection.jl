@@ -4,8 +4,8 @@
 module ArchaeologicalDetectionRastersExt
 
 using ArchaeologicalDetection, Rasters
-import ArchaeologicalDetection: adaf_input, adaf_probability, adaf_features, forest_model, forest_probability, forest_features, enki_pooled, enki_examples, enki_probability, enki_features, terrain_raster
-using ArchaeologicalDetection: EnkiModel, ENKI_CELL, enki_head, share_threshold, NNlib, Random
+import ArchaeologicalDetection: adaf_input, adaf_probability, adaf_features, forest_model, forest_probability, forest_features, enki_pooled, enki_examples, enki_probability, enki_features, terrain_raster, tumuli_input, tumuli_boxes, tumuli_features
+using ArchaeologicalDetection: DarknetModel, EnkiModel, ENKI_CELL, enki_head, share_threshold, NNlib, Random
 
 const L = Rasters.Lookups
 
@@ -55,6 +55,45 @@ function adaf_features(probability::Rasters.AbstractRaster; kw...)
 		found = (candidates = [merge(c, (j = ny + 1 - c.j,)) for c in found.candidates], labels = reverse(found.labels; dims = 2))
 	end
 	return with_grid(probability, found)
+end
+
+"""
+    tumuli_input(dem::Raster; soil = nothing, grey = TUMULI_GREY)
+
+The image the tumulus detector reads from the terrain model `dem`, on its grid (see `tumuli_input(z, cellsize)`), 0
+where `soil`, a raster on the grid of `dem`, is false, 0 or missing.
+"""
+function tumuli_input(dem::Rasters.AbstractRaster; soil = nothing, kw...)
+	s = soil === nothing ? nothing : turned(dem, Float64.(coalesce.(parent(soil), 0)))
+	return rebuild(dem; data = turned(dem, tumuli_input(turned(dem, heights(dem)), steps(dem); soil = s, kw...)), missingval = nothing)
+end
+
+"""
+    tumuli_boxes(model, image::Raster; threshold = 0.25, overlap = 0.45)
+
+The boxes of the tumuli that the detector finds in `image` (see `tumuli_input(dem)`), tiled from its north-west corner
+as the authors tiled their terrain model, with the positions `i`, `j` of their centres on the grid of `image`.
+"""
+function tumuli_boxes(model::DarknetModel, image::Rasters.AbstractRaster; kw...)
+	found = tumuli_boxes(model, turned(image, Float32.(coalesce.(parent(image), 0.0f0))); kw...)
+	ny = size(image, Y)
+	return north_first(image) ? found : [merge(b, (j = ny + 1 - b.j,)) for b in found]
+end
+
+"""
+    tumuli_features(boxes, image::Raster; min_similarity = 0.25)
+
+The tumuli of `boxes` (see `tumuli_boxes(model, image)`) of similarity at least `min_similarity`, as the authors listed
+them: `candidates`, each with its `id`, `x` and `y`, the centre of its box, its `size` in metres, the larger side of
+the box, and its `similarity`; `labels`, the cells of each box, labelled with its `id`, on the grid of `image`; and
+`similarity`, the highest similarity of a box over each cell, 0 outside every box.
+"""
+function tumuli_features(boxes, image::Rasters.AbstractRaster; min_similarity::Real = 0.25)
+	kept = filter(b -> b.similarity >= min_similarity, boxes)
+	cells = ArchaeologicalDetection.tumuli_cells(kept, size(image, X), size(image, Y))
+	grid = rebuild(image; data = cells.similarity, missingval = nothing, name = :similarity)
+	return (candidates = located(image, tumuli_features(kept, abs(steps(image)[1]))),
+		labels = rebuild(image; data = cells.labels, missingval = nothing, name = :labels), similarity = grid)
 end
 
 # The random forest on a composite read with Rasters.jl: its cells by bands, X and Y first

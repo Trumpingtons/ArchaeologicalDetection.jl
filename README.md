@@ -1,6 +1,6 @@
 # ArchaeologicalDetection.jl
 
-Trained models that detect archaeological features, run in Julia: neural networks on lidar terrain models, a random forest on Sentinel-2, and Enki, a classifier of tells on RGB imagery of 1 m; and the terrain model itself, made from a lidar point cloud.
+Trained models that detect archaeological features, run in Julia: neural networks on lidar terrain models, among them a detector of tumuli with its Sentinel-2 soil mask, a random forest on Sentinel-2, and Enki, a classifier of tells on RGB imagery of 1 m; and the terrain model itself, made from a lidar point cloud.
 
 The package holds a port of the HRNet segmentation and Faster R-CNN object detection models of [ADAF](https://github.com/EarthObservation/adaf), the Automatic Detection of Archaeological Features tool of Čož, Corns, Curran, Kocev and Kokalj (2026), [doi:10.1016/j.jasrep.2026.105733](https://doi.org/10.1016/j.jasrep.2026.105733). Each has four models, trained on airborne laser scanning data of Ireland: all archaeology, barrows, enclosures and ringforts. The [weights](https://doi.org/10.5281/zenodo.15848663) are downloaded from Zenodo at first use, about 860 MB an HRNet model and 520 MB a Faster R-CNN model, and read with Pickle.jl without running Python.
 
@@ -49,6 +49,45 @@ found = forest_features(probability; threshold = 0.55)
 | `forest_model` | The random forest, trained on the cells of the sites and cells away from them |
 | `forest_probability` | The share of its trees that vote for a site, at each cell |
 | `forest_features` | The features, with their area, roundness and highest probability, and their cells |
+
+## Tumuli of North-Western Iberia
+
+The tumulus detector of Berganzo-Besga, Orengo, Lumbreras, Carrero-Pazos, Fonte and Vilas-Estévez (2021), [doi:10.3390/rs13204181](https://doi.org/10.3390/rs13204181), which found 10,527 tumuli in Galicia. It is a YOLOv3 network of Darknet, trained on the burial mounds of Galicia and northern Portugal in the Multi-Scale Relief Model of Orengo and Petrie (2018), [doi:10.1002/esp.4317](https://doi.org/10.1002/esp.4317), computed from the Xunta de Galicia's 1 m terrain model (`MDT_1m_h50`).
+
+Its weights, about 246 MB, are downloaded at first use from the authors' link and checked by their SHA-256. The network's configuration comes from a fixed commit of the authors' repository. Darknet's files are read in Julia, and the network runs with NNlib.jl.
+
+The authors set to 0 the relief of the land where tumuli cannot be, such as towns, roads, water and rock. They found that land with a random forest of 128 trees on a multitemporal Sentinel-2 composite. Here the forest is trained on the cells of their 32 polygons, shipped in `data/tumuli_soil.csv`, in the Level-2A scenes of Earth Search from November 2016 to 5 June 2020.
+
+```julia
+using ArchaeologicalDetection, Rasters, ArchGDAL
+
+dem = replace_missing(read(Raster("MDT_1m_h50_301.img")), NaN32)  # a sheet of the Xunta's terrain model, or a part of it
+model = tumuli_model(tumuli_weights("models"))
+scenes = filter(s -> s.acquired < "2020-06-06", sentinel_scenes(lonlat_box(dem); years = 2016:2020, cloud = 20))
+composite = sentinel_composite(scenes, lonlat_box(dem); path = "sentinel.tif")  # written once, read from there later
+soil = tumuli_soil(tumuli_soil_model(), composite; to = dem)  # 1 on land where tumuli can be, on the grid of dem
+image = tumuli_input(dem; soil)  # or soil = nothing, for no soil mask
+boxes = tumuli_boxes(model, image)  # tiles of 1024 cells from the north-west corner, as the authors cut Galicia
+found = tumuli_features(boxes, image; min_similarity = 0.25)
+found.candidates  # id, x, y, size and similarity of each tumulus
+```
+
+On the authors' 30 validation images, the Julia network finds the same 72 tumuli as Darknet built from the authors' repository. 71 have the same centre and size to the cell and the same similarity to the percent Darknet prints; the last has a similarity of 95.5%, which Darknet prints as 95% and Julia rounds to 96%. On the Xunta's terrain model of the authors' tile 41722, without the soil mask, it finds 59 of the 60 tumuli they list there, a median of 0.75 m from their positions.
+
+| Function | Returns |
+|---|---|
+| `tumuli_weights` | The file of the trained detector, downloaded once, with the network's configuration beside it |
+| `tumuli_model` | The detector, a `DarknetModel` |
+| `darknet_model` | A YOLOv3 network from a Darknet configuration and weights file |
+| `darknet_boxes` | The boxes Darknet finds in an image of the network's size, with their class and probability |
+| `msrm` | The Multi-Scale Relief Model of a terrain model, as the authors computed it in Earth Engine |
+| `tumuli_input` | The image the detector reads: the Multi-Scale Relief Model, 0 where it is 0 or below and off the soil mask, in the authors' grey levels |
+| `tumuli_boxes` | The boxes of the tumuli found, tile by tile, with their centres, sides and similarity |
+| `tumuli_features` | The tumuli of at least a similarity, with their centres, size and similarity, and their cells |
+| `tumuli_soil_cells` | The authors' training cells of the soil mask, with their bands |
+| `tumuli_soil_model` | The random forest of the soil mask, trained on those cells |
+| `tumuli_soil` | The land where tumuli can be found, at each cell of a composite, or on the grid of a terrain model |
+| `lonlat_box` | The box of a raster in degrees, for `sentinel_scenes` |
 
 ## Enki on Imagery of 1 m
 

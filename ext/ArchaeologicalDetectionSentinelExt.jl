@@ -5,13 +5,13 @@
 module ArchaeologicalDetectionSentinelExt
 
 using ArchaeologicalDetection, Rasters, ArchGDAL
-import ArchaeologicalDetection: sentinel_composite, site_cells, aerial_image, site_points, index_tiles
+import ArchaeologicalDetection: sentinel_composite, site_cells, aerial_image, site_points, index_tiles, tumuli_soil, lonlat_box
 using ArchaeologicalDetection: SENTINEL_BANDS, CLOUDY_CLASSES, Downloads, JSON
 
 const L = Rasters.Lookups
 
-# Reading a Cloud-Optimised GeoTIFF over HTTPS: no listing of its folder, a few tries when the server is busy
-const HTTP_OPTIONS = ("GDAL_DISABLE_READDIR_ON_OPEN" => "EMPTY_DIR", "CPL_VSIL_CURL_ALLOWED_EXTENSIONS" => ".tif", "GDAL_HTTP_MAX_RETRY" => "4", "GDAL_HTTP_RETRY_DELAY" => "2", "GDAL_HTTP_MULTIRANGE" => "YES", "GDAL_HTTP_MERGE_CONSECUTIVE_RANGES" => "YES")
+# Reading a Cloud-Optimised GeoTIFF or a JPEG 2000 over HTTPS: no listing of its folder, a few tries when the server is busy
+const HTTP_OPTIONS = ("GDAL_DISABLE_READDIR_ON_OPEN" => "EMPTY_DIR", "CPL_VSIL_CURL_ALLOWED_EXTENSIONS" => ".tif,.jp2", "GDAL_HTTP_MAX_RETRY" => "4", "GDAL_HTTP_RETRY_DELAY" => "2", "GDAL_HTTP_TIMEOUT" => "120", "GDAL_HTTP_MULTIRANGE" => "YES", "GDAL_HTTP_MERGE_CONSECUTIVE_RANGES" => "YES")
 
 # The EPSG code of the UTM zone of the centre of the box
 function utm(box)
@@ -29,22 +29,73 @@ end
 
 # The integers of the file at href on the grid of e and cellsize in epsg, cells of x by cells of y from the north-west
 # corner, the 20 m bands taking the value of the nearest cell; 0 where the file has none
-function warped(href, epsg, e, cellsize)
+function warped(href, epsg, e, cellsize; band = 1)
 	ArchGDAL.read("/vsicurl/" * href) do source
 		options = ["-t_srs", "EPSG:$(epsg)", "-te", string.(e)..., "-tr", string(cellsize), string(cellsize), "-r", "near", "-dstnodata", "0", "-of", "MEM"]
 		ArchGDAL.gdalwarp([source], options) do w
-			ArchGDAL.read(w, 1)
+			ArchGDAL.read(w, band)
 		end
 	end
 end
 
+# The grid of e and cellsize in epsg, as a Raster of cells of x by cells of y from the north-west corner
+function grid_dims(e, cellsize, epsg)
+	nx, ny = round(Int, (e[3] - e[1]) / cellsize), round(Int, (e[4] - e[2]) / cellsize)
+	# With Y descending, Rasters puts each cell at its lower edge (as it reads a GeoTIFF of GDAL): the first is a cell below the top
+	x = X(Rasters.Projected(range(e[1]; step = cellsize, length = nx); order = L.ForwardOrdered(), span = L.Regular(Float64(cellsize)), sampling = L.Intervals(L.Start()), crs = EPSG(epsg)))
+	y = Y(Rasters.Projected(range(e[4] - cellsize; step = -cellsize, length = ny); order = L.ReverseOrdered(), span = L.Regular(-Float64(cellsize)), sampling = L.Intervals(L.Start()), crs = EPSG(epsg)))
+	return (x, y)
+end
+
+# The polygons of the opaque clouds and cirrus of a Level-1C cloud mask (MSK_CLOUDS_B00.gml), in its coordinate system
+function cloud_polygons(gml::AbstractString)
+	polygons = ArchGDAL.IGeometry[]
+	for feature in eachmatch(r"<eop:MaskFeature.*?</eop:MaskFeature>"s, gml)
+		occursin(r"<eop:maskType[^>]*>(OPAQUE|CIRRUS)<", feature.match) || continue
+		for polygon in eachmatch(r"<gml:Polygon.*?</gml:Polygon>"s, feature.match)
+			rings = map(eachmatch(r"<gml:posList[^>]*>([^<]*)<", polygon.match)) do r
+				v = parse.(Float64, split(strip(r.captures[1])))
+				[(v[k], v[k + 1]) for k in 1:2:length(v) - 1]
+			end
+			isempty(rings) || push!(polygons, ArchGDAL.createpolygon(rings))
+		end
+	end
+	return polygons
+end
+
+# The cells of the grid under the opaque clouds and cirrus of a Level-1C scene
+function cloudy_cells(asset, epsg, e, cellsize)
+	if asset.kind === :raster  # MSK_CLASSI_B00.jp2: opaque clouds in its first band, cirrus in its second
+		return (warped(asset.href, epsg, e, cellsize; band = 1) .> 0) .| (warped(asset.href, epsg, e, cellsize; band = 2) .> 0)
+	end
+	gml = String(take!(Downloads.download(asset.href, IOBuffer())))
+	polygons = cloud_polygons(gml)
+	dims = grid_dims(e, cellsize, epsg)
+	isempty(polygons) && return falses(length(dims[1]), length(dims[2]))
+	source = match(r"srsName=\"[^\"]*?(?<epsg>\d+)\"", gml)
+	from = source === nothing ? epsg : parse(Int, source[:epsg])
+	from == epsg || (polygons = [ArchGDAL.reproject(p, EPSG(from), EPSG(epsg); order = :trad) for p in polygons])
+	area = ArchGDAL.createpolygon([(e[1], e[2]), (e[3], e[2]), (e[3], e[4]), (e[1], e[4]), (e[1], e[2])])
+	filter!(p -> ArchGDAL.intersects(p, area), polygons)  # the clouds over the grid
+	isempty(polygons) && return falses(length(dims[1]), length(dims[2]))
+	return parent(boolmask(polygons; to = Raster(zeros(Bool, dims); crs = EPSG(epsg)), progress = false, verbose = false))
+end
+
 # Reads one scene onto the grid: the reflectance of each band and the cells that are clear, or nothing when no cell is
 function scene_on_grid(scene, epsg, e, cellsize)
-	clear = .!in.(warped(scene.assets["scl"].href, epsg, e, cellsize), Ref(CLOUDY_CLASSES))
+	kept = Dict{String, Any}()
+	if haskey(scene.assets, "scl")  # Level-2A: the scene classification
+		clear = .!in.(warped(scene.assets["scl"].href, epsg, e, cellsize), Ref(CLOUDY_CLASSES))
+	else  # Level-1C: the cells with data, outside the cloud mask
+		kept[first(SENTINEL_BANDS)] = warped(scene.assets[first(SENTINEL_BANDS)].href, epsg, e, cellsize)
+		clear = kept[first(SENTINEL_BANDS)] .> 0
+		any(clear) || return nothing
+		clear .&= .!cloudy_cells(scene.assets["clouds"], epsg, e, cellsize)
+	end
 	any(clear) || return nothing
 	values = map(SENTINEL_BANDS) do band
 		a = scene.assets[band]
-		v = warped(a.href, epsg, e, cellsize)
+		v = haskey(kept, band) ? kept[band] : warped(a.href, epsg, e, cellsize)
 		clear .&= v .> 0
 		Float32.(v .* a.scale .+ a.offset)
 	end
@@ -86,10 +137,7 @@ function sentinel_composite(scenes, box; path = nothing, cellsize::Real = 10)
 	for b in 1:nb, j in 1:ny, i in 1:nx
 		counted[i, j] > 0 && (data[i, j, b] = Float32(total[i, j, b] / counted[i, j]))
 	end
-	# With Y descending, Rasters puts each cell at its lower edge (as it reads a GeoTIFF of GDAL): the first is a cell below the top
-	x = X(Rasters.Projected(range(e[1]; step = cellsize, length = nx); order = L.ForwardOrdered(), span = L.Regular(Float64(cellsize)), sampling = L.Intervals(L.Start()), crs = EPSG(epsg)))
-	y = Y(Rasters.Projected(range(e[4] - cellsize; step = -cellsize, length = ny); order = L.ReverseOrdered(), span = L.Regular(-Float64(cellsize)), sampling = L.Intervals(L.Start()), crs = EPSG(epsg)))
-	composite = Raster(data, (x, y, Band(1:nb)); missingval = missing, crs = EPSG(epsg), name = :reflectance)
+	composite = Raster(data, (grid_dims(e, cellsize, epsg)..., Band(1:nb)); missingval = missing, crs = EPSG(epsg), name = :reflectance)
 	if path !== nothing
 		mkpath(dirname(abspath(path)))
 		write(path, replace_missing(composite, NaN32); missingval = NaN32)
@@ -116,6 +164,30 @@ function site_cells(composite::Rasters.AbstractRaster, sites::AbstractString; ra
 	end
 	isempty(geometries) && error("$(sites) has no features")
 	return boolmask(geometries; to = grid)
+end
+
+# The box of a raster in degrees, its edges taken at eleven points each: west, south, east, north
+function lonlat_box(r::Rasters.AbstractRaster)
+	b = Rasters.Extents.extent(r)
+	(x0, x1), (y0, y1) = b.X, b.Y
+	points = [[x, y] for x in range(x0, x1; length = 11) for y in range(y0, y1; length = 11) if x in (x0, x1) || y in (y0, y1)]
+	p = ArchGDAL.reproject(points, crs(r), EPSG(4326); order = :trad)
+	return (minimum(first, p), minimum(last, p), maximum(first, p), maximum(last, p))
+end
+
+"""
+    tumuli_soil(model, composite::Raster; to = nothing)
+
+The soil fit for tumuli (see `tumuli_soil(model, features)`) at every cell of the composite `composite` (see
+`sentinel_composite`), 1 where it is and 0 where it is not, or a band is missing; with `to`, a terrain model, on its
+grid, each of its cells taking the class of the nearest cell of the composite, as the authors multiplied their 1 m
+relief model by the classes of 10 m.
+"""
+function tumuli_soil(model, composite::Rasters.AbstractRaster; to = nothing)
+	features = parent(permutedims(composite, (X, Y, Band)))
+	soil = rebuild(composite[Band(1)]; data = Float32.(tumuli_soil(model, features)), missingval = nothing, name = :soil)
+	to === nothing && return soil
+	return resample(soil; to = to, method = :near)
 end
 
 # A source of GDAL's WMS driver of map tiles of Web Mercator at zoom level z: url with ${z}, ${x} and ${y}
@@ -171,7 +243,7 @@ function aerial_image(box; source = :esri, path = nothing, cellsize::Real = 1)
 	mkpath(dirname(target))
 	partial = target * ".part"  # moved to target only when whole, so that an image cut short is never read as the image
 	try
-		ArchGDAL.environment(; globalconfig = ["GDAL_HTTP_MAX_RETRY" => "4", "GDAL_HTTP_RETRY_DELAY" => "2"]) do
+		ArchGDAL.environment(; globalconfig = ["GDAL_HTTP_MAX_RETRY" => "4", "GDAL_HTTP_RETRY_DELAY" => "2", "GDAL_HTTP_TIMEOUT" => "120"]) do
 			ArchGDAL.read(image_source(source, box, cellsize)) do s
 				ArchGDAL.nraster(s) >= 3 || error("The imagery has $(ArchGDAL.nraster(s)) bands: red, green and blue are needed")
 				options = ["-of", "GTiff", "-t_srs", "EPSG:$(epsg)", "-te", string.(e)..., "-tr", string(cellsize), string(cellsize), "-r", "bilinear",
