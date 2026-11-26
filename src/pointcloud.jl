@@ -20,14 +20,21 @@ file, or the address of a COPC file on the web, of which only the header is read
 `epsg` (`nothing` when PDAL names no EPSG code).
 """
 function point_cloud_summary(source::AbstractString)
-	reader = is_copc(source) ? `--driver readers.copc` : ``
-	info = JSON.parse(read(`$(PDAL_jll.pdal()) info --summary $reader $source`, String))["summary"]
+	reader = is_copc(source) ? `--driver readers.copc` : `--readers.las.srs_vlr_order=$SRS_VLR_ORDER`
+	output, report = IOBuffer(), IOBuffer()
+	success(pipeline(`$(PDAL_jll.pdal()) info --summary $reader $source`; stdout = output, stderr = report)) ||
+		error("PDAL could not read the point cloud: " * strip(String(take!(report))))
+	info = JSON.parse(String(take!(output)))["summary"]
 	b = info["bounds"]
 	srs = get(info, "srs", Dict())
 	wkt = srs isa AbstractDict ? string(get(srs, "wkt", "")) : ""
 	return (points = Int(info["num_points"]), bounds = (xmin = b["minx"], ymin = b["miny"], zmin = b["minz"], xmax = b["maxx"], ymax = b["maxy"], zmax = b["maxz"]),
 		wkt = wkt, epsg = epsg_code(wkt))
 end
+
+# The coordinate system of a LAS file is read from its WKT record, and else from its GeoTIFF keys, which PDAL otherwise
+# skips in LAS 1.4 files of point formats 6 to 10, where the specification asks for WKT; Spain's PNOA lidar has only them.
+const SRS_VLR_ORDER = "wkt1,geotiff"
 
 is_copc(source) = endswith(lowercase(source), ".copc.laz")
 is_web(source) = startswith(source, "https://") || startswith(source, "http://")
@@ -63,7 +70,7 @@ function fetch_points(sources, path::AbstractString; bounds = nothing, resolutio
 		else
 			resolution === nothing || @warn "resolution applies only to COPC files: $(s) is read whole"
 			local_file = is_web(s) ? downloaded(s, folder) : s
-			stage = Dict{String, Any}("type" => "readers.las", "filename" => local_file)
+			stage = Dict{String, Any}("type" => "readers.las", "filename" => local_file, "srs_vlr_order" => SRS_VLR_ORDER)
 		end
 		push!(stages, stage)
 	end
