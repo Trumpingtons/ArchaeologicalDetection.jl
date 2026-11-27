@@ -126,8 +126,10 @@ found = enki_features(probability; share = 0.1)  # the tenth of the cells of hig
 
 A bare-earth terrain model made from the points of a lidar survey. [PDAL](https://pdal.io), through PDAL_jll, reads LAS and LAZ files, local or on the web, and COPC files over the web, only the part within an area, and gathers them into one LAZ file, which LazIO.jl reads into Julia. The ground is kept as the survey classified it, classes 2 and 8, or found again with the progressive morphological filter of Zhang, Chen, Whitman, Shyu, Yan and Zhang (2003), [doi:10.1109/TGRS.2003.810682](https://doi.org/10.1109/TGRS.2003.810682), or the simple morphological filter of Pingel, Clarke and McBride (2013), [doi:10.1016/j.isprsjprs.2012.12.002](https://doi.org/10.1016/j.isprsjprs.2012.12.002), both of Geomorphometry.jl. The cells without ground are filled by inverse distance weighting from the nearest cells with ground, up to a distance, and the ground points of each cell are counted, so that what was filled shows.
 
+PDAL_jll and LazIO.jl are not installed with the package, since every PDAL_jll from 2.9 on is built on an older GDAL than Rasters.jl and ArchGDAL.jl may use: install them, and load them, for `point_cloud_summary`, `fetch_points` and `read_points`.
+
 ```julia
-using ArchaeologicalDetection, Rasters, ArchGDAL
+using ArchaeologicalDetection, PDAL_jll, LazIO, Rasters, ArchGDAL
 
 area = (696600, 1968700, 697700, 1970300)  # xmin, ymin, xmax, ymax, in the coordinates of the points
 tiles = index_tiles("/vsizip/MX19_Inomata_TileIndex.zip/MX19_Inomata_TileIndex.shp", area)  # a tile index; or files, a folder, a COPC address

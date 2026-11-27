@@ -3,6 +3,8 @@
 # the ground found again with a morphological filter; the lowest ground point of each cell of a grid, the cells without
 # one filled from the cells around them, up to a distance, and the ground points of each cell counted, so that what is
 # filled shows. The grids run from the south-west corner, x first; the extension for Rasters.jl turns them into rasters.
+# PDAL and LazIO are read by the extension for PDAL_jll and LazIO.jl, so that the package itself does not hold back
+# GDAL: every PDAL_jll from 2.9 on is built on GDAL_jll 303.
 
 """The classes of the LAS specification that are noise, left out of every grid: low point (7) and high noise (18)."""
 const NOISE_CLASSES = (7, 18)
@@ -17,20 +19,9 @@ const GROUND_CLASSES = (2, 8)
 What the header of the point cloud `source` says, read by PDAL without reading its points: a local LAS, LAZ or COPC
 file, or the address of a COPC file on the web, of which only the header is read. Its `points`, its `bounds`
 (`xmin`, `ymin`, `zmin`, `xmax`, `ymax`, `zmax`) and its coordinate system, as `wkt` (empty when the file has none) and
-`epsg` (`nothing` when PDAL names no EPSG code).
+`epsg` (`nothing` when PDAL names no EPSG code). Needs PDAL_jll and LazIO.jl, as `using PDAL_jll, LazIO`.
 """
-function point_cloud_summary(source::AbstractString)
-	reader = is_copc(source) ? `--driver readers.copc` : `--readers.las.srs_vlr_order=$SRS_VLR_ORDER`
-	output, report = IOBuffer(), IOBuffer()
-	success(pipeline(`$(PDAL_jll.pdal()) info --summary $reader $source`; stdout = output, stderr = report)) ||
-		error("PDAL could not read the point cloud: " * strip(String(take!(report))))
-	info = JSON.parse(String(take!(output)))["summary"]
-	b = info["bounds"]
-	srs = get(info, "srs", Dict())
-	wkt = srs isa AbstractDict ? string(get(srs, "wkt", "")) : ""
-	return (points = Int(info["num_points"]), bounds = (xmin = b["minx"], ymin = b["miny"], zmin = b["minz"], xmax = b["maxx"], ymax = b["maxy"], zmax = b["maxz"]),
-		wkt = wkt, epsg = epsg_code(wkt))
-end
+function point_cloud_summary end
 
 # The coordinate system of a LAS file is read from its WKT record, and else from its GeoTIFF keys, which PDAL otherwise
 # skips in LAS 1.4 files of point formats 6 to 10, where the specification asks for WKT; Spain's PNOA lidar has only them.
@@ -54,43 +45,9 @@ kept and nothing is read again. `sources` is a file or address, or several: LAS 
 (downloaded once into `folder`), and COPC files (`.copc.laz`), of which over the web only the parts within `bounds`
 are read. `bounds = (xmin, ymin, xmax, ymax)`, in the coordinates of the points, keeps only the points within it.
 `resolution`, in metres, reads a COPC file only to the level of its tree where the points are that far apart, fewer
-points and quicker, which only COPC files can do.
+points and quicker, which only COPC files can do. Needs PDAL_jll and LazIO.jl, as `using PDAL_jll, LazIO`.
 """
-function fetch_points(sources, path::AbstractString; bounds = nothing, resolution = nothing, folder = dirname(path))
-	isfile(path) && return path
-	sources = sources isa AbstractString ? [sources] : collect(sources)
-	isempty(sources) && throw(ArgumentError("no point cloud to read: no source given, or no tile of the index crosses the bounds"))
-	box = bounds === nothing ? nothing : "([$(bounds[1]),$(bounds[3])],[$(bounds[2]),$(bounds[4])])"
-	stages = Any[]
-	for s in sources
-		if is_copc(s)
-			stage = Dict{String, Any}("type" => "readers.copc", "filename" => s)
-			box === nothing || (stage["bounds"] = box)
-			resolution === nothing || (stage["resolution"] = resolution)
-		else
-			resolution === nothing || @warn "resolution applies only to COPC files: $(s) is read whole"
-			local_file = is_web(s) ? downloaded(s, folder) : s
-			stage = Dict{String, Any}("type" => "readers.las", "filename" => local_file, "srs_vlr_order" => SRS_VLR_ORDER)
-		end
-		push!(stages, stage)
-	end
-	length(stages) > 1 && push!(stages, Dict("type" => "filters.merge"))
-	box === nothing || push!(stages, Dict("type" => "filters.crop", "bounds" => box))
-	mkpath(dirname(abspath(path)))
-	partial = path * ".part"
-	push!(stages, Dict("type" => "writers.las", "filename" => partial, "compression" => true, "forward" => "all", "minor_version" => 4))
-	spec = tempname() * ".json"
-	write(spec, JSON.json(Dict("pipeline" => stages)))
-	report = IOBuffer()
-	ok = success(pipeline(`$(PDAL_jll.pdal()) pipeline $spec`; stdout = devnull, stderr = report))
-	rm(spec; force = true)
-	if !ok
-		rm(partial; force = true)
-		error("PDAL could not read the point cloud: " * strip(String(take!(report))))
-	end
-	mv(partial, path; force = true)
-	return path
-end
+function fetch_points end
 
 function downloaded(url, folder)
 	file = joinpath(mkpath(folder), basename(split(url, '?')[1]))
@@ -102,9 +59,9 @@ end
 	read_points(path)
 
 The points of the LAS or LAZ file `path`, read with LazIO, each with its `geometry` (x, y and z), `classification`,
-`return_number`, `number_of_returns` and `intensity`.
+`return_number`, `number_of_returns` and `intensity`. Needs PDAL_jll and LazIO.jl, as `using PDAL_jll, LazIO`.
 """
-read_points(path::AbstractString) = collect(LazIO.open(path))
+function read_points end
 
 """
 	point_classes(points)

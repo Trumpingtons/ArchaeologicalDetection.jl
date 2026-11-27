@@ -14,7 +14,7 @@ module ArchaeologicalDetection
 using NNlib, Pickle
 using Statistics: mean
 import DecisionTree, Downloads, JLD2, JSON, Random, ZipArchives
-import Geomorphometry, LazIO, NearestNeighbors, PDAL_jll
+import Geomorphometry, NearestNeighbors
 import Base64, OpenSSL_jll, SHA
 using SmartRegions: local_relief, label_regions, cached, cellwidth
 
