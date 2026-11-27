@@ -1,7 +1,7 @@
 name = "ArchaeologicalDetection"
 uuid = "e4fab08a-9b87-475a-9a68-5d77bd0061a8"
 authors = ["Antonio Saragga Seabra"]
-version = "0.2.3"
+version = "0.2.4"
 
 [deps]
 Base64 = "2a0f44e3-6c83-55bd-87e4-b1978d98bd5f"

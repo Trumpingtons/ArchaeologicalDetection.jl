@@ -2,8 +2,8 @@
 # coauthors (2020) found mounds in Cholistan: the mean reflectance of many scenes, each without its cloudy cells, at
 # every cell of 10 m, a random forest of 128 trees trained on the cells of known sites and cells away from them, and
 # the share of the trees that vote for a site at every cell. The scenes are those of Level-2A of Earth Search, in
-# Cloud-Optimised GeoTIFFs, or of Level-1C of Google's public copy of the archive, in JPEG 2000, over HTTPS and read
-# without an account; the composite itself is made by the extension for Rasters.jl and ArchGDAL.jl.
+# Cloud-Optimised GeoTIFFs over HTTPS, read without an account; the composite itself is made by the extension for
+# Rasters.jl and ArchGDAL.jl.
 
 const EARTH_SEARCH = "https://earth-search.aws.element84.com/v1/search"
 
@@ -12,27 +12,16 @@ by their names in Earth Search."""
 const SENTINEL_BANDS = ("blue", "green", "red", "rededge1", "rededge2", "rededge3", "nir", "nir08", "swir16", "swir22")
 
 """
-    sentinel_scenes(box; years, cloud = 30, most = 1000, level = :l2a)
+    sentinel_scenes(box; years, cloud = 30, most = 1000)
 
-The Sentinel-2 scenes over `box = (west, south, east, north)`, in degrees, acquired in `years` (as `2023:2025`), with
-at most `cloud` per cent of clouds, read without an account; at most `most` of them, the clearest first.
-
-With `level = :l2a`, the scenes of Level-2A, surface reflectance, from Earth Search's catalogue, from November 2016,
-with at most `cloud` per cent of clouds over the whole scene. With `level = :l1c`, the scenes of Level-1C, reflectance
-at the top of the atmosphere, from June 2015, from Google's public copy of the Sentinel-2 archive, with at most
-`cloud` per cent of cloudy cells in the tile, as Earth Engine's `CLOUDY_PIXEL_PERCENTAGE` gives it; an acquisition
-processed more than once is taken as it was processed first. Their files are JPEG 2000, of which only the blocks over
-the area are read.
-
-Each scene has its `id`, `acquired`, `cloud`, `epsg` (its coordinate system) and `assets`: for each band of
-[`SENTINEL_BANDS`](@ref), the address of its file with its `scale` and `offset`, by which the stored integers become
-reflectance; and the cloud mask, the scene classification `scl` for Level-2A, the mask `clouds` of opaque clouds and
-cirrus for Level-1C.
+The Sentinel-2 Level-2A scenes over `box = (west, south, east, north)`, in degrees, acquired in `years` (as
+`2023:2025`), with at most `cloud` per cent of clouds over the whole scene, from Earth Search's catalogue, which needs
+no account; at most `most` of them, the clearest first. Each scene has its `id`, `acquired`, `cloud`, `epsg` (its
+coordinate system) and `assets`: for each band of [`SENTINEL_BANDS`](@ref) and the scene classification `scl`, the
+address of its Cloud-Optimised GeoTIFF with its `scale` and `offset`, by which the stored integers become reflectance.
 """
-function sentinel_scenes(box; years, cloud::Real = 30, most::Integer = 1000, level::Symbol = :l2a)
+function sentinel_scenes(box; years, cloud::Real = 30, most::Integer = 1000)
 	length(box) == 4 && box[1] < box[3] && box[2] < box[4] || throw(ArgumentError("box is (west, south, east, north), in degrees"))
-	level === :l1c && return l1c_scenes(box, years, cloud, most)
-	level === :l2a || throw(ArgumentError("level is :l2a or :l1c"))
 	days = "$(first(years))-01-01T00:00:00Z/$(last(years))-12-31T23:59:59Z"
 	url = EARTH_SEARCH * "?collections=sentinel-2-l2a&limit=100&bbox=" * join(box, ",") * "&datetime=" * escapeuri(days)
 	scenes = NamedTuple[]
@@ -53,88 +42,6 @@ function sentinel_scenes(box; years, cloud::Real = 30, most::Integer = 1000, lev
 	unique!(s -> s.id, scenes)
 	sort!(scenes; by = s -> s.cloud)
 	return scenes[1:min(most, end)]
-end
-
-# Level-1C from Google's public copy of the Sentinel-2 archive, read over HTTPS without an account
-const SENTINEL_ARCHIVE = "https://storage.googleapis.com/gcp-public-data-sentinel-2"
-const ARCHIVE_LISTING = "https://storage.googleapis.com/storage/v1/b/gcp-public-data-sentinel-2/o"
-const L1C_FILES = Dict("blue" => "B02", "green" => "B03", "red" => "B04", "rededge1" => "B05", "rededge2" => "B06",
-	"rededge3" => "B07", "nir" => "B08", "nir08" => "B8A", "swir16" => "B11", "swir22" => "B12")
-const L1C_PRODUCT = r"(?<sensed>\d{8}T\d{6})_N(?<baseline>\d{4})_R(?<orbit>\d{3})_T(?<tile>\w{5})_(?<processed>\d{8}T\d{6})\.SAFE/?$"
-
-# The names under prefix in the archive: the objects, or with folders = true the folders one level down
-function archive_names(prefix; folders::Bool = false)
-	names, token = String[], nothing
-	while true
-		url = ARCHIVE_LISTING * "?prefix=" * escapeuri(prefix) * (folders ? "&delimiter=%2F&fields=prefixes,nextPageToken" : "&fields=items(name),nextPageToken") *
-			(token === nothing ? "" : "&pageToken=" * escapeuri(token))
-		page = JSON.parse(String(take!(retried(() -> Downloads.download(url, IOBuffer(); timeout = 120)))))
-		append!(names, folders ? get(page, "prefixes", String[]) : [i["name"] for i in get(page, "items", [])])
-		token = get(page, "nextPageToken", nothing)
-		token === nothing && return names
-	end
-end
-
-# The tiles of Sentinel-2's grid over the box, as 29TNG, from the Level-2A scenes of Earth Search of a year: the grid is
-# the same at both levels
-function sentinel_tiles(box)
-	url = EARTH_SEARCH * "?collections=sentinel-2-l2a&limit=100&bbox=" * join(box, ",") * "&datetime=" * escapeuri("2020-01-01T00:00:00Z/2020-12-31T23:59:59Z")
-	tiles = Set{String}()
-	while url !== nothing
-		page = JSON.parse(String(take!(paged(url))))
-		for f in page["features"]
-			p = f["properties"]
-			push!(tiles, string(p["mgrs:utm_zone"], p["mgrs:latitude_band"], p["mgrs:grid_square"]))
-		end
-		next = [l["href"] for l in page["links"] if l["rel"] == "next"]
-		url = isempty(next) ? nothing : first(next)
-	end
-	isempty(tiles) && error("No tile of Sentinel-2 covers the box $(box)")
-	return sort!(collect(tiles))
-end
-
-function l1c_scenes(box, years, cloud, most)
-	products = String[]
-	for tile in sentinel_tiles(box)
-		append!(products, archive_names("tiles/$(parse(Int, tile[1:end-3]))/$(tile[end-2])/$(tile[end-1:end])/"; folders = true))
-	end
-	found = Dict{Tuple{String, String, String}, Tuple{String, String}}()  # each acquisition, by day, orbit and tile, as processed first
-	for p in products
-		m = match(L1C_PRODUCT, p)
-		(m === nothing || parse(Int, m[:sensed][1:4]) ∉ years) && continue
-		key = (m[:sensed][1:8], m[:orbit], m[:tile])
-		(!haskey(found, key) || m[:processed] < found[key][2]) && (found[key] = (p, m[:processed]))
-	end
-	scenes = asyncmap(p -> l1c_scene(p), [first(v) for v in values(found)]; ntasks = 16)
-	scenes = [s for s in scenes if s !== nothing && s.cloud <= cloud]
-	sort!(scenes; by = s -> s.cloud)
-	return scenes[1:min(most, end)]
-end
-
-# A scene of Level-1C from the files of its product: nothing when a band or the cloud mask is not there
-function l1c_scene(product)
-	m = match(L1C_PRODUCT, product)
-	names = archive_names(product)
-	file(suffix) = (k = findfirst(n -> endswith(n, suffix), names); k === nothing ? nothing : SENTINEL_ARCHIVE * "/" * names[k])
-	metadata = file("/MTD_TL.xml")
-	metadata === nothing && return nothing
-	xml = String(take!(retried(() -> Downloads.download(metadata, IOBuffer(); timeout = 120))))
-	c = match(r"<CLOUDY_PIXEL_PERCENTAGE>(?<c>[^<]+)<", xml)
-	e = match(r"EPSG:(?<epsg>\d+)", xml)
-	(c === nothing || e === nothing) && return nothing
-	offset = parse(Int, m[:baseline]) >= 400 ? -0.1 : 0.0  # from processing baseline 04.00 the stored integers are 1,000 above
-	assets = Dict{String, Any}()
-	for (band, name) in L1C_FILES
-		href = file("_$(name).jp2")
-		href === nothing && return nothing
-		assets[band] = (href = href, scale = 1.0e-4, offset = offset)
-	end
-	gml, classes = file("/MSK_CLOUDS_B00.gml"), file("/MSK_CLASSI_B00.jp2")  # the mask before processing baseline 04.00, and from it
-	gml === nothing && classes === nothing && return nothing
-	assets["clouds"] = gml === nothing ? (href = classes, kind = :raster) : (href = gml, kind = :gml)
-	s = m[:sensed]
-	acquired = "$(s[1:4])-$(s[5:6])-$(s[7:8])T$(s[10:11]):$(s[12:13]):$(s[14:15])Z"
-	return (id = splitext(basename(rstrip(product, '/')))[1], acquired = acquired, cloud = parse(Float64, c[:c]), epsg = parse(Int, e[:epsg]), assets = assets)
 end
 
 # A page of Earth Search's results: a page that fails each time it is asked, as some pages of 100 scenes do with 502,
@@ -182,9 +89,8 @@ const CLOUDY_CLASSES = (0, 1, 3, 8, 9, 10)
 
 The multitemporal composite of `scenes` (see [`sentinel_scenes`](@ref)) over `box = (west, south, east, north)`, in
 degrees: at every cell of `cellsize` metres, in the UTM zone of the centre of the box, the mean reflectance of each band
-of [`SENTINEL_BANDS`](@ref) over the scenes where the cell is clear, and `missing` where it is clear in none. A cell is
-clear where the scene classification says so, for Level-2A (see [`CLOUDY_CLASSES`](@ref)), and outside the opaque
-clouds and cirrus of the cloud mask, for Level-1C, as Earth Engine's band `QA60` gives them. The 20 m bands take the value of the nearest cell.
+of [`SENTINEL_BANDS`](@ref) over the scenes where the cell is clear, as the scene classification says (see
+[`CLOUDY_CLASSES`](@ref)), and `missing` where it is clear in none. The 20 m bands take the value of the nearest cell.
 Only the cells of the box are read from each scene, a few seconds a scene, several scenes at once when Julia has
 several threads. With `path`, the composite is written there as a GeoTIFF and read from there later, whatever the
 scenes. Needs Rasters.jl and ArchGDAL.jl.
